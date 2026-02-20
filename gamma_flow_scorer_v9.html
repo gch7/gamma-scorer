@@ -1,0 +1,1429 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gamma Capital — UOA Flow Scorer</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060a14;
+    --surface: #0d1424;
+    --card: #111827;
+    --border: #1e2d47;
+    --accent: #00ff88;
+    --accent2: #ff6b35;
+    --accent3: #4fa3ff;
+    --text: #e2e8f0;
+    --muted: #4a5568;
+    --green: #10b981;
+    --yellow: #f59e0b;
+    --red: #ef4444;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    min-height: 100vh;
+    padding: 24px;
+  }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(0,255,136,0.015) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,136,0.015) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none; z-index: 0;
+  }
+  .wrapper { position: relative; z-index: 1; max-width: 1200px; margin: 0 auto; }
+
+  /* LOADER */
+  #loader {
+    position: fixed; inset: 0; background: var(--bg);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    z-index: 9999; gap: 20px;
+  }
+  .loader-logo { font-family: 'Space Mono', monospace; font-size: 20px; color: var(--accent); letter-spacing: 3px; }
+  .loader-bar-track { width: 240px; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .loader-bar-fill { height: 100%; background: var(--accent); border-radius: 2px; animation: loadBar 2s ease forwards; }
+  @keyframes loadBar { from{width:0} to{width:100%} }
+  .loader-text { font-size: 12px; color: var(--muted); font-family: 'Space Mono', monospace; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 20px; margin-bottom: 32px;
+    flex-wrap: wrap; gap: 12px;
+  }
+  .logo { font-family: 'Space Mono', monospace; }
+  .logo-main { font-size: 22px; color: var(--accent); letter-spacing: 2px; }
+  .logo-sub  { font-size: 11px; color: var(--muted); letter-spacing: 4px; text-transform: uppercase; margin-top: 2px; }
+  .header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+  .live-badge {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(0,255,136,0.08); border: 1px solid rgba(0,255,136,0.25);
+    padding: 6px 14px; border-radius: 20px;
+    font-size: 11px; font-family: 'Space Mono', monospace; color: var(--accent);
+  }
+  .live-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .last-update { font-size: 10px; color: var(--muted); font-family: 'Space Mono', monospace; }
+
+  /* ERROR BANNER */
+  #errorBanner {
+    display: none; background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3);
+    border-radius: 10px; padding: 14px 20px; margin-bottom: 20px;
+    font-size: 13px; color: var(--red);
+  }
+
+  /* STATS BAR */
+  .stats-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+  @media(max-width:700px){ .stats-bar { grid-template-columns: 1fr 1fr; } }
+  .stat-card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 20px; transition: border-color 0.2s;
+  }
+  .stat-card:hover { border-color: var(--accent); }
+  .stat-label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; }
+  .stat-value { font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; }
+  .stat-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+  .c-green { color: var(--green); } .c-accent { color: var(--accent); }
+  .c-accent2 { color: var(--accent2); } .c-accent3 { color: var(--accent3); }
+  .c-yellow { color: var(--yellow); } .c-red { color: var(--red); }
+  .c-text { color: var(--text); }
+
+  /* MAIN GRID */
+  .main-grid { display: grid; grid-template-columns: 1fr 380px; gap: 20px; }
+  @media(max-width:900px){ .main-grid { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 16px; padding: 24px; }
+  .panel-title {
+    font-family: 'Space Mono', monospace; font-size: 13px; color: var(--accent);
+    letter-spacing: 1px; text-transform: uppercase; margin-bottom: 20px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-badge {
+    font-size: 10px; background: rgba(0,255,136,0.1); color: var(--accent);
+    border: 1px solid rgba(0,255,136,0.2); padding: 2px 8px; border-radius: 10px;
+  }
+
+  /* FORM */
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .form-group { display: flex; flex-direction: column; gap: 6px; }
+  .form-group.full { grid-column: 1/-1; }
+  label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+  input, select {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; color: var(--text);
+    font-family: 'DM Sans', sans-serif; font-size: 14px;
+    padding: 10px 14px; outline: none; transition: border-color 0.2s;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  select option { background: var(--card); }
+
+  .btn-score {
+    width: 100%; margin-top: 18px; padding: 14px;
+    background: var(--accent); color: #000;
+    border: none; border-radius: 10px;
+    font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700;
+    cursor: pointer; letter-spacing: 1px; transition: all 0.2s;
+  }
+  .btn-score:hover { background: #00e87a; transform: translateY(-1px); box-shadow: 0 8px 20px rgba(0,255,136,0.25); }
+  .btn-score:active { transform: translateY(0); }
+  .btn-score:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; transform: none; box-shadow: none; }
+
+  /* SCORE RESULT */
+  .score-result {
+    margin-top: 20px; background: var(--surface);
+    border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: none;
+  }
+  .score-result.show { display: block; animation: slideIn 0.3s ease; }
+  @keyframes slideIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+  .score-display { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+  .score-circle {
+    width: 80px; height: 80px; border-radius: 50%; flex-shrink: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; border: 3px solid;
+  }
+  .score-number { font-family: 'Space Mono', monospace; font-size: 26px; font-weight: 700; }
+  .score-lbl { font-size: 9px; color: var(--muted); margin-top: 2px; }
+  .verdict-text { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+  .verdict-sub { font-size: 12px; color: var(--muted); line-height: 1.4; }
+  .breakdown-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; }
+  .breakdown-item { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; }
+  .bd-label { font-size: 11px; color: var(--muted); width: 110px; flex-shrink: 0; }
+  .bd-bar-track { flex: 1; background: var(--border); border-radius: 4px; height: 6px; overflow: hidden; }
+  .bd-bar-fill { height: 100%; border-radius: 4px; transition: width 0.6s ease; }
+  .bd-pts { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--text); width: 40px; text-align: right; }
+
+  /* TABS */
+  .tabs { display: flex; gap: 6px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tab {
+    padding: 6px 14px; border-radius: 20px; font-size: 11px; cursor: pointer;
+    border: 1px solid var(--border); color: var(--muted); transition: all 0.2s;
+    font-family: 'Space Mono', monospace;
+  }
+  .tab.active { background: rgba(0,255,136,0.1); border-color: rgba(0,255,136,0.3); color: var(--accent); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* STATS TABLE */
+  .stats-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .stats-table th {
+    font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px;
+    padding: 6px 10px; border-bottom: 1px solid var(--border); text-align: left;
+  }
+  .stats-table td { padding: 7px 10px; border-bottom: 1px solid rgba(30,45,71,0.5); }
+  .stats-table tr:hover td { background: rgba(0,255,136,0.04); }
+  .wr-badge {
+    display: inline-block; padding: 2px 7px; border-radius: 10px;
+    font-size: 10px; font-weight: 600; font-family: 'Space Mono', monospace;
+  }
+  .wr-g { background: rgba(16,185,129,0.15); color: var(--green); }
+  .wr-y { background: rgba(245,158,11,0.15); color: var(--yellow); }
+  .wr-r { background: rgba(239,68,68,0.15); color: var(--red); }
+
+  /* HEATMAP */
+  .heatmap-wrap { overflow-x: auto; }
+  .heatmap-grid {
+    display: grid; grid-template-columns: 90px repeat(5, 1fr);
+    gap: 4px; font-size: 11px; min-width: 420px;
+  }
+  .hm-header { text-align: center; color: var(--muted); padding: 4px; font-size: 10px; }
+  .hm-label { color: var(--muted); padding: 6px 4px; display: flex; align-items: center; font-size: 10px; }
+  .hm-cell {
+    padding: 8px 4px; border-radius: 6px; text-align: center;
+    font-family: 'Space Mono', monospace; font-size: 10px; font-weight: 700;
+  }
+
+  /* INSIGHTS */
+  .insight-list { display: flex; flex-direction: column; gap: 10px; }
+  .insight-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 3px solid var(--accent); border-radius: 8px; padding: 12px 14px;
+  }
+  .insight-item.warn { border-left-color: var(--yellow); }
+  .insight-item.bad  { border-left-color: var(--red); }
+  .insight-title { font-size: 12px; font-weight: 600; margin-bottom: 3px; }
+  .insight-body  { font-size: 11px; color: var(--muted); line-height: 1.4; }
+
+  /* SCORE GUIDE */
+  .score-guide-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; text-align: center;
+  }
+  @media(max-width:600px){ .score-guide-grid { grid-template-columns: 1fr 1fr; } }
+  .guide-card { padding: 14px; border-radius: 10px; }
+
+  .mini-bar { height: 4px; border-radius: 2px; margin-top: 6px; }
+  .loading-pulse { animation: loadPulse 1.5s infinite; }
+
+  /* PAGE NAV */
+  .page-nav {
+    display: flex; gap: 4px; margin-bottom: 28px;
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 14px; padding: 6px;
+  }
+  .page-btn {
+    flex: 1; padding: 10px 16px; border-radius: 10px;
+    font-family: 'Space Mono', monospace; font-size: 12px;
+    border: none; cursor: pointer; letter-spacing: 0.5px;
+    background: transparent; color: var(--muted);
+    transition: all 0.2s;
+  }
+  .page-btn.active {
+    background: rgba(0,255,136,0.12);
+    color: var(--accent);
+    border: 1px solid rgba(0,255,136,0.25);
+  }
+  .page-btn:hover:not(.active) { color: var(--text); background: rgba(255,255,255,0.04); }
+  .page { display: none; }
+  .page.active { display: block; }
+
+  /* OPERATOR CARDS */
+  .op-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; margin-bottom: 24px; }
+  @media(max-width:900px){ .op-grid { grid-template-columns: 1fr; } }
+  .op-card {
+    background: var(--card); border-radius: 16px; padding: 22px;
+    border: 1px solid var(--border); transition: border-color 0.2s;
+  }
+  .op-card:hover { border-color: var(--accent); }
+  .op-card-header { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
+  .op-icon { font-size: 28px; }
+  .op-name { font-family: 'Space Mono', monospace; font-size: 13px; font-weight: 700; line-height: 1.3; }
+  .op-tag { font-size: 10px; color: var(--muted); margin-top: 2px; letter-spacing: 1px; }
+  .op-stat-row { display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 0; border-bottom: 1px solid rgba(30,45,71,0.6); }
+  .op-stat-row:last-child { border-bottom: none; }
+  .op-stat-label { font-size: 11px; color: var(--muted); }
+  .op-stat-val { font-size: 12px; font-weight: 600; font-family: 'Space Mono', monospace; }
+  .op-badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11px;
+    font-family: 'Space Mono', monospace; font-weight: 700; }
+  .op-note { margin-top: 14px; font-size: 11px; color: var(--muted); line-height: 1.6;
+    background: var(--surface); border-radius: 8px; padding: 10px 12px;
+    border-left: 3px solid; }
+
+  /* CASE STUDY */
+  .case-study {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 24px; margin-bottom: 20px;
+  }
+  .case-title { font-family: 'Space Mono', monospace; font-size: 14px;
+    color: var(--accent); font-weight: 700; margin-bottom: 6px; }
+  .case-sub { font-size: 12px; color: var(--muted); margin-bottom: 20px; }
+  .case-trades { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; }
+  @media(max-width:800px){ .case-trades { grid-template-columns: 1fr 1fr; } }
+  .case-trade-card {
+    background: var(--surface); border-radius: 12px; padding: 14px;
+    text-align: center; border: 1px solid var(--border);
+  }
+  .case-ticker { font-family: 'Space Mono', monospace; font-size: 18px;
+    font-weight: 700; color: var(--accent); margin-bottom: 6px; }
+  .case-row { font-size: 11px; color: var(--muted); margin: 3px 0; }
+  .case-pnl { font-family: 'Space Mono', monospace; font-size: 16px;
+    font-weight: 700; margin-top: 8px; }
+  .case-total { margin-top: 16px; text-align: center; font-size: 13px; color: var(--yellow);
+    font-family: 'Space Mono', monospace; }
+
+  /* RULES TABLE */
+  .rules-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  @media(max-width:700px){ .rules-grid { grid-template-columns: 1fr; } }
+  .rule-card {
+    background: var(--card); border-radius: 12px; padding: 18px 20px;
+    border-left: 4px solid; display: flex; flex-direction: column; gap: 6px;
+  }
+  .rule-num { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--muted); }
+  .rule-title { font-size: 14px; font-weight: 700; }
+  .rule-body { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .rule-stat { font-family: 'Space Mono', monospace; font-size: 12px; font-weight: 700; margin-top: 4px; }
+
+  /* HEATMAP TABLE */
+  .hm-table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  .hm-table th { background: var(--surface); color: var(--muted); font-size: 10px;
+    text-transform: uppercase; letter-spacing: 1px; padding: 8px 10px;
+    border-bottom: 1px solid var(--border); font-family: 'Space Mono', monospace; }
+  .hm-table td { padding: 8px 10px; border-bottom: 1px solid rgba(30,45,71,0.4);
+    text-align: center; font-family: 'Space Mono', monospace; font-size: 12px; }
+  .hm-table tr:hover td { background: rgba(0,255,136,0.04); }
+  .hm-cell-hot  { background: rgba(0,255,136,0.15); color: var(--accent); font-weight: 700; border-radius: 6px; }
+  .hm-cell-good { background: rgba(16,185,129,0.12); color: var(--green); border-radius: 6px; }
+  .hm-cell-mid  { background: rgba(245,158,11,0.1); color: var(--yellow); border-radius: 6px; }
+  .hm-cell-bad  { background: rgba(239,68,68,0.1); color: var(--red); border-radius: 6px; }
+  .hm-cell-na   { color: var(--muted); }
+  .hm-label-col { text-align: left !important; color: var(--text); font-weight: 600; }
+
+  @keyframes loadPulse { 0%,100%{opacity:0.4} 50%{opacity:1} }
+
+  .refresh-btn {
+    background: none; border: 1px solid var(--border); color: var(--muted);
+    border-radius: 8px; padding: 4px 10px; font-size: 11px; cursor: pointer;
+    font-family: 'Space Mono', monospace; transition: all 0.2s;
+  }
+  .refresh-btn:hover { border-color: var(--accent); color: var(--accent); }
+</style>
+</head>
+<body>
+
+<!-- LOADER -->
+<div id="loader">
+  <div class="loader-logo">GAMMA CAPITAL</div>
+  <div class="loader-bar-track"><div class="loader-bar-fill"></div></div>
+  <div class="loader-text" id="loaderText">Connessione a Google Sheets...</div>
+</div>
+
+<div class="wrapper" id="app" style="display:none">
+
+  <header>
+    <div class="logo">
+      <div class="logo-main">GAMMA CAPITAL</div>
+      <div class="logo-sub">UOA Flow Intelligence · Live Data</div>
+    </div>
+    <div class="header-right">
+      <div class="live-badge"><div class="live-dot"></div> DATI LIVE DA GOOGLE SHEETS</div>
+      <div class="last-update" id="lastUpdate">—</div>
+    </div>
+  </header>
+
+  <div id="errorBanner"></div>
+
+  <!-- PAGE NAV -->
+  <div class="page-nav">
+    <button class="page-btn active" onclick="showPage('scorer')">⚡ Flow Scorer</button>
+    <button class="page-btn" onclick="showPage('operatori')">👤 Analisi Operatori</button>
+  </div>
+
+  <!-- PAGE: SCORER -->
+  <div class="page active" id="page-scorer">
+
+  <!-- STATS BAR -->
+  <div class="stats-bar">
+    <div class="stat-card">
+      <div class="stat-label">Trade Analizzati</div>
+      <div class="stat-value c-accent" id="s_total">—</div>
+      <div class="stat-sub">storico reale Gamma Capital</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Win Rate Medio</div>
+      <div class="stat-value c-green" id="s_wr">—</div>
+      <div class="stat-sub">trade con P&L &gt; 0</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Avg P&L</div>
+      <div class="stat-value c-accent2" id="s_avg">—</div>
+      <div class="stat-sub" id="s_median_sub">mediana: —</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Best Trade</div>
+      <div class="stat-value c-accent3" id="s_best">—</div>
+      <div class="stat-sub" id="s_best_sub">—</div>
+    </div>
+  </div>
+
+  <div class="main-grid">
+
+    <!-- LEFT -->
+    <div style="display:flex; flex-direction:column; gap:20px;">
+
+      <!-- SCORER -->
+      <div class="panel">
+        <div class="panel-title">
+          ⚡ Flow Scorer — Inserisci un Flusso
+          <button class="refresh-btn" onclick="loadSheetData()">↻ Aggiorna dati</button>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Ticker</label>
+            <input type="text" id="f_ticker" placeholder="es. NVDA" oninput="this.value=this.value.toUpperCase()">
+          </div>
+          <div class="form-group">
+            <label>Call / Put</label>
+            <select id="f_cp">
+              <option value="C">CALL</option>
+              <option value="P">PUT</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Premium ($)</label>
+            <input type="number" id="f_premium" placeholder="es. 4000000">
+          </div>
+          <div class="form-group">
+            <label>DTE (giorni alla scadenza)</label>
+            <input type="number" id="f_dte" placeholder="es. 45">
+          </div>
+          <div class="form-group">
+            <label>Giorno apertura</label>
+            <select id="f_day">
+              <option value="lun">Lunedì</option>
+              <option value="mar">Martedì</option>
+              <option value="mer">Mercoledì</option>
+              <option value="gio">Giovedì</option>
+              <option value="ven">Venerdì</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Tipo flusso (NOTE)</label>
+            <select id="f_note">
+              <option value="10M AA">10M AA</option>
+              <option value="5M AA">5M AA</option>
+              <option value="4M AA" selected>4M AA</option>
+              <option value="3M AA">3M AA</option>
+              <option value="2M AA">2M AA</option>
+              <option value="1M AA">1M AA</option>
+              <option value="1M ASK">1M ASK</option>
+              <option value="1M AA WEEK">1M AA WEEK</option>
+              <option value="88">GOLDEN (88)</option>
+              <option value="UNUSUAL STRIKE">UNUSUAL STRIKE</option>
+              <option value="SHORT SQUEEZ">SHORT SQUEEZE</option>
+              <option value="SHITTY FLOW">SHITTY FLOW</option>
+              <option value="">Nessuna nota</option>
+            </select>
+          </div>
+        </div>
+        <button class="btn-score" id="btnScore" onclick="scoreFlow()">CALCOLA SCORE →</button>
+
+        <div class="score-result" id="scoreResult">
+          <div class="score-display">
+            <div class="score-circle" id="scoreCircle">
+              <div class="score-number" id="scoreNum">0</div>
+              <div class="score-lbl">/ 100</div>
+            </div>
+            <div class="score-verdict">
+              <div class="verdict-text" id="verdictText">—</div>
+              <div class="verdict-sub" id="verdictSub">—</div>
+            </div>
+          </div>
+          <div class="breakdown-title">Breakdown del Punteggio</div>
+          <div id="breakdownBars"></div>
+          <div id="tickerNote" style="margin-top:12px; font-size:11px; color:var(--muted); padding-top:10px; border-top:1px solid var(--border);"></div>
+        </div>
+      </div>
+
+      <!-- STATS TABS -->
+      <div class="panel">
+        <div class="panel-title">📊 Statistiche Live <span class="panel-badge" id="statsBadge">—</span></div>
+        <div class="tabs">
+          <div class="tab active" onclick="switchTab('ticker')">Per Ticker</div>
+          <div class="tab" onclick="switchTab('premium')">Per Premium</div>
+          <div class="tab" onclick="switchTab('dte')">Per DTE</div>
+          <div class="tab" onclick="switchTab('day')">Per Giorno</div>
+          <div class="tab" onclick="switchTab('heatmap')">Heatmap</div>
+        </div>
+
+        <div class="tab-content active" id="tab-ticker">
+          <table class="stats-table" id="tickerTable">
+            <tr><th>Ticker</th><th>N</th><th>Win Rate</th><th>Avg P&L</th><th>Best</th></tr>
+          </table>
+        </div>
+
+        <div class="tab-content" id="tab-premium">
+          <table class="stats-table" id="premiumTable">
+            <tr><th>Premium</th><th>N</th><th>Win Rate</th><th>Avg P&L</th><th>Mediana</th></tr>
+          </table>
+        </div>
+
+        <div class="tab-content" id="tab-dte">
+          <table class="stats-table" id="dteTable">
+            <tr><th>DTE</th><th>N</th><th>Win Rate</th><th>Avg P&L</th><th>Mediana</th></tr>
+          </table>
+        </div>
+
+        <div class="tab-content" id="tab-day">
+          <table class="stats-table" id="dayTable">
+            <tr><th>Giorno</th><th>N</th><th>Win Rate</th><th>Avg P&L</th><th>Mediana</th></tr>
+          </table>
+        </div>
+
+        <div class="tab-content" id="tab-heatmap">
+          <div style="font-size:11px; color:var(--muted); margin-bottom:10px;">Win Rate% per combinazione DTE × Premium (calcolato in tempo reale)</div>
+          <div class="heatmap-wrap">
+            <div class="heatmap-grid" id="heatmapGrid"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- SCORE GUIDE -->
+      <div class="panel">
+        <div class="panel-title">🚦 Score Guide</div>
+        <div class="score-guide-grid">
+          <div class="guide-card" style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.2)">
+            <div style="font-size:20px;margin-bottom:6px;">🔴</div>
+            <div style="font-family:'Space Mono',monospace;font-size:13px;color:var(--red);font-weight:700">0–40</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">SKIP</div>
+            <div class="mini-bar" style="background:var(--red);opacity:0.4"></div>
+          </div>
+          <div class="guide-card" style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2)">
+            <div style="font-size:20px;margin-bottom:6px;">🟡</div>
+            <div style="font-family:'Space Mono',monospace;font-size:13px;color:var(--yellow);font-weight:700">40–60</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">WATCH</div>
+            <div class="mini-bar" style="background:var(--yellow);opacity:0.4"></div>
+          </div>
+          <div class="guide-card" style="background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.2)">
+            <div style="font-size:20px;margin-bottom:6px;">🟢</div>
+            <div style="font-family:'Space Mono',monospace;font-size:13px;color:var(--green);font-weight:700">60–80</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">BUONO</div>
+            <div class="mini-bar" style="background:var(--green);opacity:0.4"></div>
+          </div>
+          <div class="guide-card" style="background:rgba(0,255,136,0.08);border:1px solid rgba(0,255,136,0.25)">
+            <div style="font-size:20px;margin-bottom:6px;">⚡</div>
+            <div style="font-family:'Space Mono',monospace;font-size:13px;color:var(--accent);font-weight:700">80–100</div>
+            <div style="font-size:11px;color:var(--muted);margin-top:4px">PREMIUM</div>
+            <div class="mini-bar" style="background:var(--accent);opacity:0.6"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT -->
+    <div style="display:flex; flex-direction:column; gap:16px;">
+
+      <!-- INSIGHTS LIVE -->
+      <div class="panel">
+        <div class="panel-title">💡 Insights <span class="panel-badge" id="insightsBadge">LIVE</span></div>
+        <div class="insight-list" id="insightsList">
+          <div class="insight-item loading-pulse">
+            <div class="insight-title">Caricamento insights...</div>
+            <div class="insight-body">Analisi del tuo storico in corso</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- TOP TICKERS LIVE -->
+      <div class="panel">
+        <div class="panel-title">🏆 Top Ticker <span class="panel-badge">per Avg P&L</span></div>
+        <table class="stats-table" id="topTickerTable">
+          <tr><th>Ticker</th><th>N</th><th>Win Rate</th><th>Avg P&L</th></tr>
+        </table>
+      </div>
+
+    </div>
+  </div>
+
+  <div style="text-align:center;margin-top:28px;font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;">
+    GAMMA CAPITAL · UOA FLOW INTELLIGENCE · DATI LIVE DA GOOGLE SHEETS
+  </div>
+  </div><!-- /page-scorer -->
+
+  <!-- PAGE: ANALISI OPERATORI -->
+  <div class="page" id="page-operatori">
+    <div class="stats-bar" style="margin-bottom:28px">
+      <div class="stat-card"><div class="stat-label">Trade nel campione</div><div class="stat-value c-accent">400</div><div class="stat-sub">storico reale · orari NY</div></div>
+      <div class="stat-card"><div class="stat-label">Operatori identificati</div><div class="stat-value c-accent3">3</div><div class="stat-sub">profili comportamentali distinti</div></div>
+      <div class="stat-card"><div class="stat-label">Miglior profilo WR</div><div class="stat-value c-accent">100%</div><div class="stat-sub">Pre-Close Whale · n=17</div></div>
+      <div class="stat-card"><div class="stat-label">Coppie cross-ticker</div><div class="stat-value c-green">3.600+</div><div class="stat-sub">similarità comportamentale ≥7/14</div></div>
+    </div>
+    <div class="panel" style="margin-bottom:20px;border-color:rgba(0,255,136,0.2)">
+      <div class="panel-title">🧠 Metodologia — Come abbiamo identificato gli operatori</div>
+      <p style="font-size:13px;color:var(--muted);line-height:1.8">Invece di cercare lo stesso operatore sullo stesso ticker, abbiamo cercato il suo <strong style="color:var(--text)">comportamento</strong> attraverso ticker diversi. Un fondo istituzionale non ripete lo stesso ticker ogni settimana — ripete la sua <em>firma operativa</em>: stesso range di premium, stessa finestra oraria, stesso tipo di strike. Abbiamo assegnato uno <strong style="color:var(--text)">score di similarità 0–14</strong> ad ogni coppia di trade su ticker diversi pesando premium (×3), orario NY (×3), DTE (×2), OTM distance (×2), direzione (×1) e stessa data (×3). Sopra soglia 7 emergono <strong style="color:var(--accent)">3 cluster comportamentali netti</strong>.</p>
+    </div>
+    <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;letter-spacing:2px">👤 PROFILI OPERATORI</div>
+    <div class="op-grid">
+      <div class="op-card" style="border-color:rgba(0,255,136,0.3)">
+        <div class="op-card-header"><div class="op-icon">🐋</div><div><div class="op-name" style="color:var(--accent)">THE PRE-CLOSE WHALE</div><div class="op-tag">OPERATORE A · IL PIÙ AFFIDABILE</div></div></div>
+        <div class="op-stat-row"><span class="op-stat-label">⏰ Orario NY</span><span class="op-stat-val" style="color:var(--accent)">14:00 – 15:30</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">💰 Premium</span><span class="op-stat-val">$1M – $2.5M</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📞 Direzione</span><span class="op-stat-val">100% CALL</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📅 DTE</span><span class="op-stat-val">7 – 45 giorni</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📍 Strike</span><span class="op-stat-val">ITM / Near-ATM</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">🏷 Ticker</span><span class="op-stat-val" style="font-size:10px;color:var(--muted)">UAL CRWD FSLR META MSTR JPM V XLE...</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📊 N Trade</span><span class="op-stat-val">n = 17</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">✅ Win Rate</span><span class="op-badge" style="background:rgba(0,255,136,0.15);color:var(--accent);font-size:15px;padding:3px 14px">100%</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📈 Avg P&L</span><span class="op-stat-val" style="color:var(--accent);font-size:18px">+300%</span></div>
+        <div class="op-note" style="border-left-color:var(--accent)">Entra sempre nella stessa finestra pre-chiusura con premium costante su ticker diversi. Non ripete mai lo stesso ticker a breve distanza. Probabile desk istituzionale che esegue ordini direzionali prima della chiusura per evitare slippage overnight.</div>
+      </div>
+      <div class="op-card" style="border-color:rgba(79,163,255,0.3)">
+        <div class="op-card-header"><div class="op-icon">🔔</div><div><div class="op-name" style="color:var(--accent3)">THE OPEN BELL LEAPS BUYER</div><div class="op-tag">OPERATORE B · IL PIÙ SISTEMATICO</div></div></div>
+        <div class="op-stat-row"><span class="op-stat-label">⏰ Orario NY</span><span class="op-stat-val" style="color:var(--accent3)">9:30 – 10:30</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">💰 Premium</span><span class="op-stat-val">$4M – $7M</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📞 Direzione</span><span class="op-stat-val">100% CALL</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📅 DTE</span><span class="op-stat-val">LEAPS 180–900 gg</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📍 Strike</span><span class="op-stat-val">Deep ITM (&lt;-15%)</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">🏷 Ticker</span><span class="op-stat-val" style="font-size:10px;color:var(--muted)">NVDA ARM TSLA MSFT META CRM AMD AMZN...</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📊 N Trade</span><span class="op-stat-val">n = 32</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">✅ Win Rate</span><span class="op-badge" style="background:rgba(16,185,129,0.15);color:var(--green);font-size:15px;padding:3px 14px">88%</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📈 Avg P&L</span><span class="op-stat-val" style="color:var(--green);font-size:18px">+130%</span></div>
+        <div class="op-note" style="border-left-color:var(--accent3)">Massiccia size, LEAPS lunghi, entrata a campana su mega-cap tech. Il 5 agosto 2024 ha deployato $25.9M su 5 ticker diversi in 4 ore con struttura identica — tutti vincenti. Comportamento da fondo quantitativo sistematico.</div>
+      </div>
+      <div class="op-card" style="border-color:rgba(245,158,11,0.3)">
+        <div class="op-card-header"><div class="op-icon">⚡</div><div><div class="op-name" style="color:var(--yellow)">THE MORNING SWING TRADER</div><div class="op-tag">OPERATORE C · IL PIÙ AGGRESSIVO</div></div></div>
+        <div class="op-stat-row"><span class="op-stat-label">⏰ Orario NY</span><span class="op-stat-val" style="color:var(--yellow)">10:30 – 12:00</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">💰 Premium</span><span class="op-stat-val">$1M – $1.5M</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📞 Direzione</span><span class="op-stat-val">93% CALL</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📅 DTE</span><span class="op-stat-val">Short 8–21 giorni</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📍 Strike</span><span class="op-stat-val">Variabile (high-beta)</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">🏷 Ticker</span><span class="op-stat-val" style="font-size:10px;color:var(--muted)">MSTR AMAT NVDA MARA CHAU SMCI PLTR...</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📊 N Trade</span><span class="op-stat-val">n = 16</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">✅ Win Rate</span><span class="op-badge" style="background:rgba(16,185,129,0.15);color:var(--green);font-size:15px;padding:3px 14px">93%</span></div>
+        <div class="op-stat-row"><span class="op-stat-label">📈 Avg P&L</span><span class="op-stat-val" style="color:var(--green);font-size:18px">+144%</span></div>
+        <div class="op-note" style="border-left-color:var(--yellow)">Preferisce swing brevi su ticker ad alta volatilità e crypto-adjacent. Meno sistematico degli altri due ma con strike selection precisa. Entra sempre nella prima metà sessione. Unico dei tre a usare Put occasionalmente (7%).</div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:20px">
+      <div class="panel-title">🔍 Caso Studio — 5 Agosto 2024: La Firma dell'Operatore B in Azione</div>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:18px">Stesso premium $4.7M–$5.3M &nbsp;·&nbsp; CALL LEAPS Deep ITM &nbsp;·&nbsp; Orario 10:03–14:09 NY &nbsp;·&nbsp; Score similarità 12–14/14 &nbsp;·&nbsp; Tutti vincenti</p>
+      <div class="case-trades">
+        <div class="case-trade-card"><div class="case-ticker">AMZN</div><div class="case-row">🕐 13:46 NY</div><div class="case-row">💰 $5.26M · LEAPS · Deep ITM</div><div class="case-pnl" style="color:var(--green)">+51%</div></div>
+        <div class="case-trade-card"><div class="case-ticker">AMD</div><div class="case-row">🕐 13:39 NY</div><div class="case-row">💰 $5.16M · LEAPS · Deep ITM</div><div class="case-pnl" style="color:var(--green)">+23%</div></div>
+        <div class="case-trade-card"><div class="case-ticker">CRM</div><div class="case-row">🕐 14:09 NY</div><div class="case-row">💰 $5.29M · LEAPS · Deep ITM</div><div class="case-pnl" style="color:var(--green)">+42%</div></div>
+        <div class="case-trade-card"><div class="case-ticker">SBUX</div><div class="case-row">🕐 14:03 NY</div><div class="case-row">💰 $5.30M · LEAPS · Deep ITM</div><div class="case-pnl" style="color:var(--green)">+270%</div></div>
+        <div class="case-trade-card"><div class="case-ticker">ARM</div><div class="case-row">🕐 10:28 NY</div><div class="case-row">💰 $4.88M · LEAPS · OTM 5-15%</div><div class="case-pnl" style="color:var(--green)">+60%</div></div>
+      </div>
+      <div class="case-total">TOTALE DEPLOYATO: ~$25.9M &nbsp;·&nbsp; 5/5 VINCENTI &nbsp;·&nbsp; UN SOLO OPERATORE &nbsp;·&nbsp; UN SOLO GIORNO</div>
+    </div>
+
+    <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;letter-spacing:2px">🚦 REGOLE OPERATIVE</div>
+    <div class="rules-grid">
+      <div class="rule-card" style="border-left-color:var(--accent)"><div class="rule-num">REGOLA 01</div><div class="rule-title" style="color:var(--accent)">Pre-Close = Entra Sempre</div><div class="rule-body">CALL con premium $1M–$2.5M tra le 14:00 e le 15:30 NY su qualsiasi ticker. Nel nostro storico questo pattern non ha perso una volta sola.</div><div class="rule-stat" style="color:var(--accent)">100% WR &nbsp;·&nbsp; +300% avg &nbsp;·&nbsp; n=17</div></div>
+      <div class="rule-card" style="border-left-color:var(--accent3)"><div class="rule-num">REGOLA 02</div><div class="rule-title" style="color:var(--accent3)">Open Bell + LEAPS = Istituzionale</div><div class="rule-body">Premium $4M–$7M nei primi 60 minuti di mercato su LEAPS Deep ITM. Se compare su 2+ ticker nello stesso giorno, è quasi certamente la stessa mano. Il 2° trade è la conferma.</div><div class="rule-stat" style="color:var(--accent3)">88% WR &nbsp;·&nbsp; +130% avg &nbsp;·&nbsp; n=32</div></div>
+      <div class="rule-card" style="border-left-color:var(--yellow)"><div class="rule-num">REGOLA 03</div><div class="rule-title" style="color:var(--yellow)">Stesso Premium, Ticker Diversi = Stesso Op.</div><div class="rule-body">Vedi lo stesso range di premium su ticker diversi entro ±1 giorno? Alta probabilità stessa persona che accumula. Il terzo trade sullo stesso profilo è il segnale più forte in assoluto.</div><div class="rule-stat" style="color:var(--yellow)">3.600+ coppie cross-ticker identificate</div></div>
+      <div class="rule-card" style="border-left-color:var(--red)"><div class="rule-num">REGOLA 04 — EVITA</div><div class="rule-title" style="color:var(--red)">$600K–$1M su Scadenze Weekly</div><div class="rule-body">Sembra un flusso di qualità ma è la trappola più comune nel nostro storico. WR 25–46% indipendentemente dal ticker o dalla nota. Evitare anche se la nota dice "AA".</div><div class="rule-stat" style="color:var(--red)">25–46% WR &nbsp;·&nbsp; Skip sempre</div></div>
+    </div>
+
+    <div class="panel" style="margin-top:20px">
+      <div class="panel-title">⏰ Heatmap Win Rate — Orario NY × Premium <span class="panel-badge">CALL · n≥3 · multi-ticker</span></div>
+      <div style="overflow-x:auto"><table class="hm-table">
+        <thead><tr><th style="text-align:left;min-width:150px">Ora NY \ Premium</th><th>&lt;300K</th><th>300-600K</th><th>600K-1M</th><th>1M-1.5M</th><th>1.5M-2.5M</th><th>2.5M-4M</th><th>4M-7M</th><th>12M+</th></tr></thead>
+        <tbody>
+          <tr><td class="hm-label-col">Pre-Market &lt;9:30</td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td><td class="hm-cell-hot">100%<small><br>n=4</small></td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td></tr>
+          <tr><td class="hm-label-col">Open 9:30–10:30</td><td class="hm-cell-bad">40%<small><br>n=5</small></td><td class="hm-cell-mid">67%<small><br>n=15</small></td><td class="hm-cell-bad">46%<small><br>n=13</small></td><td class="hm-cell-good">88%<small><br>n=24</small></td><td class="hm-cell-mid">77%<small><br>n=26</small></td><td class="hm-cell-mid">56%<small><br>n=9</small></td><td class="hm-cell-mid">76%<small><br>n=17</small></td><td class="hm-cell-good">88%<small><br>n=32</small></td></tr>
+          <tr><td class="hm-label-col">Morning 10:30–12</td><td class="hm-cell-good">80%<small><br>n=5</small></td><td class="hm-cell-mid">54%<small><br>n=11</small></td><td class="hm-cell-bad">43%<small><br>n=7</small></td><td class="hm-cell-hot">94%<small><br>n=16</small></td><td class="hm-cell-mid">79%<small><br>n=19</small></td><td class="hm-cell-mid">75%<small><br>n=8</small></td><td class="hm-cell-hot">100%<small><br>n=6</small></td><td class="hm-cell-hot">100%<small><br>n=4</small></td></tr>
+          <tr><td class="hm-label-col">Midday 12–14</td><td class="hm-cell-mid">57%<small><br>n=7</small></td><td class="hm-cell-bad">50%<small><br>n=4</small></td><td class="hm-cell-good">83%<small><br>n=6</small></td><td class="hm-cell-mid">77%<small><br>n=9</small></td><td class="hm-cell-good">83%<small><br>n=12</small></td><td class="hm-cell-hot">100%<small><br>n=6</small></td><td class="hm-cell-good">90%<small><br>n=10</small></td><td class="hm-cell-good">89%<small><br>n=9</small></td></tr>
+          <tr style="background:rgba(0,255,136,0.05)"><td class="hm-label-col" style="color:var(--accent)">⭐ Pre-Close 14–15:30</td><td class="hm-cell-na">—</td><td class="hm-cell-good">86%<small><br>n=7</small></td><td class="hm-cell-mid">56%<small><br>n=9</small></td><td class="hm-cell-hot" style="outline:2px solid var(--accent);border-radius:6px">100%<small><br>n=11</small></td><td class="hm-cell-hot" style="outline:2px solid var(--accent);border-radius:6px">100%<small><br>n=6</small></td><td class="hm-cell-mid">71%<small><br>n=7</small></td><td class="hm-cell-na">—</td><td class="hm-cell-hot">100%<small><br>n=4</small></td></tr>
+        </tbody>
+      </table></div>
+      <div style="margin-top:10px;font-size:11px;color:var(--muted)"><span style="color:var(--accent);font-weight:700">Verde brillante</span> = WR ≥90% confermato. <span style="color:var(--red)">Rosso</span> = evitare sempre. Orari da Milano (CET/CEST) a New York (ET) −6h.</div>
+    </div>
+
+    <div style="text-align:center;margin-top:28px;font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;">
+      GAMMA CAPITAL · OPERATOR INTELLIGENCE · DATI AGGIORNATI IN TEMPO REALE
+    </div>
+  </div><!-- /page-operatori -->
+
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════════════════════════
+const CSV_URL = 'https://script.google.com/macros/s/AKfycbxjIypTeOx3N3m1pgC5e1yzaT0f4fDt7EUgrUk6GWjyS_dHAZM2xIo1SvxyPWpzrdr79Q/exec';
+
+// Global state — populated from live sheet data
+let G = {
+  trades: [],          // parsed trade rows
+  tickerStats: {},     // { NVDA: {n,wr,avg,median,best,worst}, ... }
+  premiumStats: {},
+  dteStats: {},
+  dayStats: {},
+  tickerRank: {},      // { NVDA: 5, ... }  computed from data
+  totalClosed: 0,
+  globalWR: 0,
+  globalAvg: 0,
+  globalMedian: 0,
+  bestTrade: { pnl: 0, ticker: '', note: '' },
+  loaded: false,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+function cleanNum(s) {
+  if (s == null || s === '') return NaN;
+  s = String(s).replace(/\s/g,'').replace('$','').replace('%','').replace('‰','');
+  // Italian format: dots as thousands sep, comma as decimal
+  s = s.replace(/\./g,'').replace(',','.');
+  s = s.replace(/[^\d.\-]/g,'');
+  const n = parseFloat(s);
+  return isNaN(n) ? NaN : n;
+}
+
+function premBucket(b) {
+  if (isNaN(b)) return null;
+  if (b < 500000) return '<500K';
+  if (b < 1000000) return '500K–1M';
+  if (b < 3000000) return '1M–3M';
+  if (b < 5000000) return '3M–5M';
+  if (b < 10000000) return '5M–10M';
+  return '10M+';
+}
+
+function dteBucket(d) {
+  if (isNaN(d)) return null;
+  if (d <= 7) return '0–7 WEEKLY';
+  if (d <= 30) return '8–30';
+  if (d <= 90) return '31–90';
+  if (d <= 180) return '91–180';
+  return '180+';
+}
+
+function median(arr) {
+  if (!arr.length) return 0;
+  const sorted = [...arr].sort((a,b)=>a-b);
+  const m = Math.floor(sorted.length/2);
+  return sorted.length%2 ? sorted[m] : (sorted[m-1]+sorted[m])/2;
+}
+
+function pct(n, decimals=1) { return n.toFixed(decimals)+'%'; }
+function fmtPnl(n) {
+  const s = (n>=0?'+':'')+n.toFixed(0)+'%';
+  return s;
+}
+
+function wrClass(wr) {
+  if (wr >= 80) return 'wr-g';
+  if (wr >= 60) return 'wr-y';
+  return 'wr-r';
+}
+
+function pnlColor(n) {
+  if (n >= 100) return 'c-accent';
+  if (n >= 0)   return 'c-green';
+  return 'c-red';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FETCH — diretto da URL CSV pubblicato (no CORS issues)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function loadSheetData() {
+  setLoader(true, 'Connessione a Google Sheets...');
+  try {
+    const response = await fetch(CSV_URL, { redirect: 'follow' });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const text = await response.text();
+    let rows;
+    try { rows = JSON.parse(text); }
+    catch(e) { throw new Error('Risposta non valida dal server: ' + text.slice(0,100)); }
+    parseArrayResponse(rows);
+  } catch(e) {
+    showError('Impossibile caricare i dati: ' + e.message);
+    hideLoader();
+  }
+}
+
+// ── Apps Script JSON parser ──────────────────────────────────────────────────
+function parseArrayResponse(rows) {
+  if (!rows || rows.length < 2) { showError('Dati vuoti o non validi.'); hideLoader(); return; }
+
+  const headers = rows[0].map(h => String(h).trim());
+  console.log('Headers ricevuti:', headers);
+
+  // Find column index by name (fuzzy)
+  const findH = names => {
+    for (const name of names) {
+      const i = headers.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+
+  // Known column layout from sheet structure — hardcoded as fallback
+  // OPEN=0,g=1,CLOSE=2,gg=3,TICKER=4,PREZZO=5,STK=6,C/P=7,EXD=8,QTY=9,
+  // OPEN P=10,BOUGHT=11,HIGH P=12,SOLD=13,NOTE=14,P&L=15,P&L %=16,
+  // DAYS=17,EXP=18,DTE=19
+  const COL = {
+    g:      findH(['g'])      >= 0 ? findH(['g'])      : 1,
+    TICKER: findH(['TICKER']) >= 0 ? findH(['TICKER']) : 4,
+    CP:     findH(['C/P'])    >= 0 ? findH(['C/P'])    : 7,
+    BOUGHT: findH(['BOUGHT']) >= 0 ? findH(['BOUGHT']) : 11,
+    NOTE:   findH(['NOTE'])   >= 0 ? findH(['NOTE'])   : 14,
+    PNL_P:  findH(['P&L %'])  >= 0 ? findH(['P&L %'])  : 16,
+    DTE:    findH(['DTE'])    >= 0 ? findH(['DTE'])    : 19,
+  };
+  console.log('Colonne mappate:', COL);
+
+  // Smart value parser: handles Apps Script returning numbers directly
+  // - Percentage cells come as decimals: 0.47 = 47%, 3.37 = 337%, -1 = -100%
+  // - Monetary cells come as integers: 4019318
+  // We distinguish by context (pct vs money)
+  const parsePercent = v => {
+    if (v == null || v === '') return NaN;
+    if (typeof v === 'number') {
+      // Apps Script returns % cells as decimals (e.g. 0.47 for 47%)
+      return Math.round(v * 100 * 100) / 100; // multiply by 100, keep 2 decimals
+    }
+    const s = String(v).replace('%','').replace(/\s/g,'');
+    // Italian format: dots=thousands, comma=decimal
+    const cleaned = s.replace(/\./g,'').replace(',','.');
+    return parseFloat(cleaned);
+  };
+
+  const parseMoney = v => {
+    if (v == null || v === '') return NaN;
+    if (typeof v === 'number') return v; // Apps Script returns raw number
+    const s = String(v).replace(/[$ ]/g,'');
+    const cleaned = s.replace(/\./g,'').replace(',','.');
+    return parseFloat(cleaned);
+  };
+
+  const parseNum = v => {
+    if (v == null || v === '') return NaN;
+    if (typeof v === 'number') return v;
+    const s = String(v).replace(/[$ %]/g,'');
+    const cleaned = s.replace(/\./g,'').replace(',','.');
+    return parseFloat(cleaned);
+  };
+
+  const trades = [];
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    const raw = c => (c >= 0 && c < row.length && row[c] != null) ? row[c] : null;
+    const str = c => raw(c) != null ? String(raw(c)).trim() : '';
+
+    const ticker = str(COL.TICKER);
+    if (!ticker || ticker === '#N/A' || ticker.toLowerCase() === 'ticker' || ticker === '') continue;
+
+    const pnlPct = parsePercent(raw(COL.PNL_P));
+    const bought = parseMoney(raw(COL.BOUGHT));
+    const dte    = parseNum(raw(COL.DTE));
+    const note   = str(COL.NOTE);
+    const cp     = str(COL.CP).toUpperCase();
+    const day    = str(COL.g).toLowerCase();
+
+    // Debug first few rows
+    if (i <= 4) console.log(`Row ${i}:`, { ticker, pnlPct, bought, dte, note, cp, day });
+
+    trades.push({ ticker, note, cp, day, pnlPct, bought, dte });
+  }
+
+  console.log(`Parsed ${trades.length} trades`);
+  G.trades = trades;
+  computeStats();
+  renderAll();
+  hideLoader();
+  showApp();
+  document.getElementById('lastUpdate').textContent =
+    'Aggiornato: ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}) +
+    ' · ' + new Date().toLocaleDateString('it-IT');
+}
+
+// ── CSV fallback parser ───────────────────────────────────────────────────────
+function parseCsvResponse(csvText) {
+  setLoader(true, 'Parsing CSV...');
+  const parseCSVLine = line => {
+    const result = []; let cur = ''; let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQ = !inQ; }
+      else if (c === ',' && !inQ) { result.push(cur.trim()); cur = ''; }
+      else { cur += c; }
+    }
+    result.push(cur.trim());
+    return result;
+  };
+  const lines = csvText.trim().split('\n').map(parseCSVLine);
+  if (lines.length < 2) throw new Error('CSV vuoto o non valido');
+  const headers = lines[0];
+  const findH = names => {
+    for (const name of names) {
+      const i = headers.findIndex(h => h.trim().toLowerCase() === name.toLowerCase());
+      if (i >= 0) return i;
+    }
+    return -1;
+  };
+  const COL = {
+    TICKER: findH(['TICKER']),
+    CP:     findH(['C/P']),
+    BOUGHT: findH(['BOUGHT']),
+    NOTE:   findH(['NOTE']),
+    PNL_P:  findH(['P&L %']),
+    DTE:    findH(['DTE']),
+    g:      findH(['g']),
+  };
+  const trades = [];
+  for (let i = 1; i < lines.length; i++) {
+    const row = lines[i];
+    const get = c => (c >= 0 && row[c] != null) ? row[c] : '';
+    const ticker = get(COL.TICKER).trim();
+    if (!ticker || ticker === '#N/A' || ticker.toLowerCase() === 'ticker') continue;
+    trades.push({
+      ticker,
+      note:   get(COL.NOTE).trim(),
+      cp:     get(COL.CP).trim().toUpperCase(),
+      day:    get(COL.g).trim().toLowerCase(),
+      pnlPct: cleanNum(get(COL.PNL_P)),
+      bought: cleanNum(get(COL.BOUGHT)),
+      dte:    cleanNum(get(COL.DTE)),
+    });
+  }
+  G.trades = trades;
+  computeStats();
+  renderAll();
+  hideLoader();
+  showApp();
+  document.getElementById('lastUpdate').textContent =
+    'Aggiornato: ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}) +
+    ' · ' + new Date().toLocaleDateString('it-IT');
+}
+
+
+function findCol(cols, names) {
+  for (const name of names) {
+    const i = cols.findIndex(c => c.trim().toLowerCase() === name.toLowerCase());
+    if (i >= 0) return i;
+  }
+  return -1;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// COMPUTE STATISTICS FROM RAW DATA
+// ═══════════════════════════════════════════════════════════════════════════════
+function computeStats() {
+  // Filter closed trades (P&L known and non-zero)
+  const closed = G.trades.filter(t => !isNaN(t.pnlPct) && t.pnlPct !== 0);
+  G.totalClosed = closed.length;
+
+  const allPnl = closed.map(t => t.pnlPct);
+  G.globalWR     = (allPnl.filter(p=>p>0).length / allPnl.length) * 100;
+  G.globalAvg    = allPnl.reduce((a,b)=>a+b,0) / allPnl.length;
+  G.globalMedian = median(allPnl);
+
+  // Best trade
+  const bestTrade = closed.reduce((b,t) => t.pnlPct > b.pnlPct ? t : b, {pnlPct:-Infinity,ticker:'',note:''});
+  G.bestTrade = bestTrade;
+
+  // Helper: build stats object from array of pnl values
+  function mkStats(arr) {
+    if (!arr.length) return null;
+    const n    = arr.length;
+    const wins = arr.filter(p=>p>0).length;
+    const avg  = arr.reduce((a,b)=>a+b,0)/n;
+    return {
+      n,
+      wr:   (wins/n)*100,
+      avg,
+      median: median(arr),
+      best:   Math.max(...arr),
+      worst:  Math.min(...arr),
+    };
+  }
+
+  // By ticker
+  const tickerMap = {};
+  closed.forEach(t => {
+    if (!tickerMap[t.ticker]) tickerMap[t.ticker] = [];
+    tickerMap[t.ticker].push(t.pnlPct);
+  });
+  G.tickerStats = {};
+  Object.entries(tickerMap).forEach(([k,v]) => { G.tickerStats[k] = mkStats(v); });
+
+  // Build ticker rank for scoring (rank 0-5 by avg*wr, n>=2)
+  const rankable = Object.entries(G.tickerStats)
+    .filter(([,s]) => s && s.n >= 2)
+    .map(([k,s]) => ({ ticker:k, score: s.avg * (s.wr/100) }))
+    .sort((a,b) => b.score - a.score);
+
+  G.tickerRank = {};
+  const total = rankable.length;
+  rankable.forEach((r, i) => {
+    const pct = i / total;
+    if (pct < 0.10) G.tickerRank[r.ticker] = 5;
+    else if (pct < 0.25) G.tickerRank[r.ticker] = 4;
+    else if (pct < 0.50) G.tickerRank[r.ticker] = 3;
+    else if (pct < 0.75) G.tickerRank[r.ticker] = 2;
+    else G.tickerRank[r.ticker] = 1;
+  });
+  // Explicitly mark 0-WR tickers
+  Object.entries(G.tickerStats).forEach(([k,s]) => {
+    if (s && s.wr === 0) G.tickerRank[k] = 0;
+  });
+
+  // By premium bucket
+  const premBuckets = ['<500K','500K–1M','1M–3M','3M–5M','5M–10M','10M+'];
+  G.premiumStats = {};
+  premBuckets.forEach(b => {
+    const arr = closed.filter(t => premBucket(t.bought) === b).map(t=>t.pnlPct);
+    G.premiumStats[b] = mkStats(arr);
+  });
+
+  // By DTE bucket
+  const dteBuckets = ['0–7 WEEKLY','8–30','31–90','91–180','180+'];
+  G.dteStats = {};
+  dteBuckets.forEach(b => {
+    const arr = closed.filter(t => dteBucket(t.dte) === b).map(t=>t.pnlPct);
+    G.dteStats[b] = mkStats(arr);
+  });
+
+  // By day
+  const days = ['lun','mar','mer','gio','ven'];
+  G.dayStats = {};
+  days.forEach(d => {
+    const arr = closed.filter(t => t.day === d).map(t=>t.pnlPct);
+    G.dayStats[d] = mkStats(arr);
+  });
+
+  G.loaded = true;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RENDER ALL UI
+// ═══════════════════════════════════════════════════════════════════════════════
+function renderAll() {
+  // Stats bar
+  document.getElementById('s_total').textContent = G.totalClosed;
+  document.getElementById('s_wr').textContent = pct(G.globalWR);
+  document.getElementById('s_avg').textContent = '+' + G.globalAvg.toFixed(0) + '%';
+  document.getElementById('s_median_sub').textContent = 'mediana: +' + G.globalMedian.toFixed(0) + '%';
+  document.getElementById('s_best').textContent = '+' + G.bestTrade.pnlPct.toFixed(0) + '%';
+  document.getElementById('s_best_sub').textContent = (G.bestTrade.ticker || '—') + ' · ' + (G.bestTrade.note || '—');
+  document.getElementById('statsBadge').textContent = G.totalClosed + ' trade';
+
+  renderTickerTable();
+  renderPremiumTable();
+  renderDteTable();
+  renderDayTable();
+  renderHeatmap();
+  renderTopTickers();
+  renderInsights();
+}
+
+function wrBadge(wr) {
+  const cls = wrClass(wr);
+  return `<span class="wr-badge ${cls}">${pct(wr,1)}</span>`;
+}
+
+function renderTickerTable() {
+  const sorted = Object.entries(G.tickerStats)
+    .filter(([,s]) => s && s.n >= 2)
+    .sort((a,b) => b[1].avg - a[1].avg);
+  let html = '<tr><th>Ticker</th><th>N</th><th>Win Rate</th><th>Avg P&L</th><th>Best</th></tr>';
+  sorted.forEach(([t,s]) => {
+    html += `<tr>
+      <td style="font-weight:600">${t}</td>
+      <td>${s.n}</td>
+      <td>${wrBadge(s.wr)}</td>
+      <td class="${pnlColor(s.avg)}">${fmtPnl(s.avg)}</td>
+      <td class="c-green">+${s.best.toFixed(0)}%</td>
+    </tr>`;
+  });
+  document.getElementById('tickerTable').innerHTML = html;
+}
+
+function renderPremiumTable() {
+  const order = ['<500K','500K–1M','1M–3M','3M–5M','5M–10M','10M+'];
+  let html = '<tr><th>Premium</th><th>N</th><th>Win Rate</th><th>Avg P&L</th><th>Mediana</th></tr>';
+  order.forEach(b => {
+    const s = G.premiumStats[b];
+    if (!s) return;
+    html += `<tr>
+      <td style="font-weight:600">${b}</td>
+      <td>${s.n}</td>
+      <td>${wrBadge(s.wr)}</td>
+      <td class="${pnlColor(s.avg)}">${fmtPnl(s.avg)}</td>
+      <td class="${pnlColor(s.median)}">${fmtPnl(s.median)}</td>
+    </tr>`;
+  });
+  document.getElementById('premiumTable').innerHTML = html;
+}
+
+function renderDteTable() {
+  const order = ['0–7 WEEKLY','8–30','31–90','91–180','180+'];
+  let html = '<tr><th>DTE</th><th>N</th><th>Win Rate</th><th>Avg P&L</th><th>Mediana</th></tr>';
+  order.forEach(b => {
+    const s = G.dteStats[b];
+    if (!s) return;
+    html += `<tr>
+      <td style="font-weight:600">${b}</td>
+      <td>${s.n}</td>
+      <td>${wrBadge(s.wr)}</td>
+      <td class="${pnlColor(s.avg)}">${fmtPnl(s.avg)}</td>
+      <td class="${pnlColor(s.median)}">${fmtPnl(s.median)}</td>
+    </tr>`;
+  });
+  document.getElementById('dteTable').innerHTML = html;
+}
+
+function renderDayTable() {
+  const order = ['lun','mar','mer','gio','ven'];
+  const labels = {lun:'Lunedì',mar:'Martedì',mer:'Mercoledì',gio:'Giovedì',ven:'Venerdì'};
+  let html = '<tr><th>Giorno</th><th>N</th><th>Win Rate</th><th>Avg P&L</th><th>Mediana</th></tr>';
+  order.forEach(d => {
+    const s = G.dayStats[d];
+    if (!s) return;
+    html += `<tr>
+      <td style="font-weight:600">${labels[d]}</td>
+      <td>${s.n}</td>
+      <td>${wrBadge(s.wr)}</td>
+      <td class="${pnlColor(s.avg)}">${fmtPnl(s.avg)}</td>
+      <td class="${pnlColor(s.median)}">${fmtPnl(s.median)}</td>
+    </tr>`;
+  });
+  document.getElementById('dayTable').innerHTML = html;
+}
+
+function renderHeatmap() {
+  const prems = ['<500K','500K–1M','1M–3M','3M–5M','5M–10M','10M+'];
+  const dtes  = ['0–7 WEEKLY','8–30','31–90','91–180','180+'];
+  const dteLabels = ['WEEKLY','8-30d','31-90d','91-180d','180d+'];
+  const closed = G.trades.filter(t => !isNaN(t.pnlPct) && t.pnlPct !== 0);
+
+  function cell(wr, n) {
+    if (n === 0) return `<div class="hm-cell" style="background:rgba(30,45,71,0.4);color:var(--muted)">—</div>`;
+    let bg, color;
+    if (wr >= 90) { bg='rgba(0,255,136,0.25)'; color='#00ff88'; }
+    else if (wr >= 80) { bg='rgba(16,185,129,0.2)'; color='#10b981'; }
+    else if (wr >= 70) { bg='rgba(245,158,11,0.2)'; color='#f59e0b'; }
+    else { bg='rgba(239,68,68,0.15)'; color='#ef4444'; }
+    return `<div class="hm-cell" style="background:${bg};color:${color}" title="n=${n}">${wr.toFixed(0)}%</div>`;
+  }
+
+  let html = `<div class="hm-header" style="font-size:8px;color:var(--muted)">P↓/DTE→</div>`;
+  dteLabels.forEach(d => { html += `<div class="hm-header">${d}</div>`; });
+
+  prems.forEach(pb => {
+    html += `<div class="hm-label">${pb}</div>`;
+    dtes.forEach(db => {
+      const arr = closed.filter(t => premBucket(t.bought) === pb && dteBucket(t.dte) === db).map(t=>t.pnlPct);
+      const n = arr.length;
+      const wr = n > 0 ? (arr.filter(p=>p>0).length / n) * 100 : 0;
+      html += cell(wr, n);
+    });
+  });
+  document.getElementById('heatmapGrid').innerHTML = html;
+}
+
+function renderTopTickers() {
+  const sorted = Object.entries(G.tickerStats)
+    .filter(([,s]) => s && s.n >= 2)
+    .sort((a,b) => b[1].avg - a[1].avg)
+    .slice(0, 12);
+  let html = '<tr><th>Ticker</th><th>N</th><th>Win Rate</th><th>Avg P&L</th></tr>';
+  sorted.forEach(([t,s]) => {
+    html += `<tr>
+      <td style="font-weight:600">${t}</td>
+      <td>${s.n}</td>
+      <td>${wrBadge(s.wr)}</td>
+      <td class="${pnlColor(s.avg)}">${fmtPnl(s.avg)}</td>
+    </tr>`;
+  });
+  document.getElementById('topTickerTable').innerHTML = html;
+}
+
+function renderInsights() {
+  const insights = [];
+
+  // Best DTE
+  const dteEntries = Object.entries(G.dteStats).filter(([,s])=>s&&s.n>=5).sort((a,b)=>b[1].avg-a[1].avg);
+  if (dteEntries.length >= 1) {
+    const [best] = dteEntries[0];
+    insights.push({type:'good', title:`📅 DTE ${best} è il sweet spot`,
+      body:`Win Rate ${pct(dteEntries[0][1].wr,0)}, avg ${fmtPnl(dteEntries[0][1].avg)}. Miglior combinazione DTE dal tuo storico.`});
+  }
+
+  // Best premium
+  const premEntries = Object.entries(G.premiumStats).filter(([,s])=>s&&s.n>=5).sort((a,b)=>b[1].avg-a[1].avg);
+  if (premEntries.length >= 1) {
+    const [best, s] = premEntries[0];
+    insights.push({type:'good', title:`💰 Premium ${best} performa meglio`,
+      body:`WR ${pct(s.wr,0)}, avg ${fmtPnl(s.avg)}. Con n=${s.n} trade nel campione.`});
+  }
+
+  // Worst day
+  const dayLabels = {lun:'Lunedì',mar:'Martedì',mer:'Mercoledì',gio:'Giovedì',ven:'Venerdì'};
+  const dayEntries = Object.entries(G.dayStats).filter(([,s])=>s&&s.n>=10).sort((a,b)=>a[1].wr-b[1].wr);
+  if (dayEntries.length >= 1) {
+    const [worst, s] = dayEntries[0];
+    const [best] = [...dayEntries].sort((a,b)=>b[1].avg-a[1].avg)[0];
+    insights.push({type:'warn', title:`⚠️ ${dayLabels[worst]} è il giorno peggiore`,
+      body:`WR ${pct(s.wr,0)}, avg ${fmtPnl(s.avg)}. ${dayLabels[best]} è il giorno migliore — max performance storicamente.`});
+  }
+
+  // 100% WR tickers
+  const perfectTickers = Object.entries(G.tickerStats)
+    .filter(([,s]) => s && s.wr === 100 && s.n >= 3)
+    .sort((a,b) => b[1].n - a[1].n)
+    .map(([t]) => t);
+  if (perfectTickers.length > 0) {
+    insights.push({type:'good', title:`🎯 ${perfectTickers.slice(0,3).join(', ')} — 100% Win Rate`,
+      body:`Con almeno 3 trade ciascuno. Storicamente i flussi su questi ticker non hanno mai perso.`});
+  }
+
+  // 0% WR tickers
+  const zeroTickers = Object.entries(G.tickerStats)
+    .filter(([,s]) => s && s.wr === 0 && s.n >= 2)
+    .map(([t]) => t);
+  if (zeroTickers.length > 0) {
+    insights.push({type:'bad', title:`🚫 ${zeroTickers.join(', ')}: 0% WR`,
+      body:`Tutti i trade su questi ticker si sono conclusi in perdita. Da evitare categoricamente.`});
+  }
+
+  // Calls vs puts
+  const calls = G.trades.filter(t=>t.cp==='C'&&!isNaN(t.pnlPct)&&t.pnlPct!==0).map(t=>t.pnlPct);
+  const puts  = G.trades.filter(t=>t.cp==='P'&&!isNaN(t.pnlPct)&&t.pnlPct!==0).map(t=>t.pnlPct);
+  if (calls.length && puts.length) {
+    const cwr = (calls.filter(p=>p>0).length/calls.length)*100;
+    const pwr = (puts.filter(p=>p>0).length/puts.length)*100;
+    const cavg = calls.reduce((a,b)=>a+b,0)/calls.length;
+    const pavg = puts.reduce((a,b)=>a+b,0)/puts.length;
+    insights.push({type:'good', title:`📞 Calls avg ${fmtPnl(cavg)} · Puts avg ${fmtPnl(pavg)}`,
+      body:`Calls WR ${pct(cwr,0)} (n=${calls.length}) — Puts WR ${pct(pwr,0)} (n=${puts.length}). Le puts hanno WR più alto, le calls profitto medio maggiore.`});
+  }
+
+  const html = insights.map(i => `
+    <div class="insight-item ${i.type==='warn'?'warn':i.type==='bad'?'bad':''}">
+      <div class="insight-title">${i.title}</div>
+      <div class="insight-body">${i.body}</div>
+    </div>
+  `).join('');
+  document.getElementById('insightsList').innerHTML = html || '<div style="color:var(--muted);font-size:12px">Dati insufficienti per generare insights.</div>';
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCORING ENGINE (uses live-computed stats)
+// ═══════════════════════════════════════════════════════════════════════════════
+function scoreFlow() {
+  if (!G.loaded) { alert('Dati non ancora caricati.'); return; }
+
+  const ticker  = document.getElementById('f_ticker').value.trim().toUpperCase();
+  const cp      = document.getElementById('f_cp').value;
+  const premium = parseFloat(document.getElementById('f_premium').value);
+  const dte     = parseFloat(document.getElementById('f_dte').value);
+  const day     = document.getElementById('f_day').value;
+  const note    = document.getElementById('f_note').value;
+
+  let score = 0;
+  const breakdown = [];
+
+  // 1. PREMIUM (max 25) — derived from live premiumStats
+  const pb = premBucket(premium);
+  const premOrder = ['<500K','500K–1M','1M–3M','3M–5M','5M–10M','10M+'];
+  let s1 = 5;
+  if (pb && G.premiumStats[pb]) {
+    const s = G.premiumStats[pb];
+    // score proportional to (wr * avg) normalized over all buckets
+    const scores = premOrder.map(b => G.premiumStats[b] ? G.premiumStats[b].wr/100 * Math.max(0,G.premiumStats[b].avg) : 0);
+    const maxScore = Math.max(...scores);
+    const myScore = s.wr/100 * Math.max(0,s.avg);
+    s1 = Math.round((myScore / (maxScore||1)) * 25);
+  }
+  breakdown.push({label:'Premium Size', pts:s1, max:25, color:'#00ff88',
+    detail: pb ? `${pb} — WR ${G.premiumStats[pb]?pct(G.premiumStats[pb].wr,0):'?'}` : '?'});
+  score += s1;
+
+  // 2. DTE (max 20)
+  const db = dteBucket(dte);
+  const dteOrder = ['0–7 WEEKLY','8–30','31–90','91–180','180+'];
+  let s2 = 5;
+  if (db && G.dteStats[db]) {
+    const dscores = dteOrder.map(b => G.dteStats[b] ? G.dteStats[b].wr/100 * Math.max(0,G.dteStats[b].avg) : 0);
+    const dmax = Math.max(...dscores);
+    const ds = G.dteStats[db];
+    const my = ds.wr/100 * Math.max(0,ds.avg);
+    s2 = Math.round((my/(dmax||1)) * 20);
+  }
+  breakdown.push({label:'DTE', pts:s2, max:20, color:'#4fa3ff',
+    detail: db ? `${db} — WR ${G.dteStats[db]?pct(G.dteStats[db].wr,0):'?'}` : '?'});
+  score += s2;
+
+  // 3. TICKER (max 20) — live rank
+  const tr = G.tickerRank[ticker] ?? (ticker ? 2 : 1);
+  const trMap = {5:20,4:17,3:14,2:10,1:5,0:0};
+  const s3 = trMap[tr] ?? 8;
+  const tStats = G.tickerStats[ticker];
+  const tickerDetail = tStats
+    ? `WR ${pct(tStats.wr,0)}, avg ${fmtPnl(tStats.avg)}, n=${tStats.n}`
+    : ticker ? 'Ticker non nel tuo storico' : 'Inserisci ticker';
+  breakdown.push({label:'Ticker Quality', pts:s3, max:20, color:'#10b981', detail: tickerDetail});
+  score += s3;
+
+  // 4. FLOW TYPE (max 20)
+  const n = note.toUpperCase();
+  let s4 = 8;
+  if (n.includes('SHITTY')) s4 = 0;
+  else if (n.includes('SHORT SQUEEZ')) s4 = 2;
+  else if (n.includes('88')) s4 = 10;
+  else if (n.includes('WEEK') && n.includes('AA')) s4 = 14;
+  else {
+    const m = n.match(/(\d+(?:[.,]\d+)?)M\s*(AA|ASK|A\b)/);
+    if (m) {
+      const sz = parseFloat(m[1].replace(',','.'));
+      if (sz >= 10) s4 = 20;
+      else if (sz >= 5) s4 = 18;
+      else if (sz >= 3) s4 = 17;
+      else if (sz >= 1) s4 = 15;
+      else s4 = 10;
+    }
+  }
+  breakdown.push({label:'Flow Type (NOTE)', pts:s4, max:20, color:'#ff6b35', detail: note || 'Nessuna nota'});
+  score += s4;
+
+  // 5. C/P (max 10)
+  const calls = G.trades.filter(t=>t.cp==='C'&&!isNaN(t.pnlPct)&&t.pnlPct!==0).map(t=>t.pnlPct);
+  const pPuts = G.trades.filter(t=>t.cp==='P'&&!isNaN(t.pnlPct)&&t.pnlPct!==0).map(t=>t.pnlPct);
+  const cWR = calls.length ? (calls.filter(p=>p>0).length/calls.length)*100 : 79;
+  const pWR = pPuts.length ? (pPuts.filter(p=>p>0).length/pPuts.length)*100 : 85;
+  const s5 = cp === 'P' ? Math.round((pWR/(Math.max(cWR,pWR)))*10) : Math.round((cWR/(Math.max(cWR,pWR)))*10);
+  breakdown.push({label:'Call / Put', pts:s5, max:10, color:'#f59e0b',
+    detail: cp==='C'?`Calls WR ${pct(cWR,0)}`:`Puts WR ${pct(pWR,0)}`});
+  score += s5;
+
+  // 6. DAY (max 5)
+  const dayScores = ['lun','mar','mer','gio','ven'].map(d => G.dayStats[d] ? G.dayStats[d].avg : 0);
+  const dayMax = Math.max(...dayScores);
+  const myDay = G.dayStats[day] ? G.dayStats[day].avg : 0;
+  const s6 = Math.round((myDay/(dayMax||1)) * 5);
+  const dayNames = {lun:'Lunedì',mar:'Martedì',mer:'Mercoledì',gio:'Giovedì',ven:'Venerdì'};
+  breakdown.push({label:'Giorno', pts:s6, max:5, color:'#8b5cf6',
+    detail: `${dayNames[day]} — avg ${G.dayStats[day]?fmtPnl(G.dayStats[day].avg):'?'}`});
+  score += s6;
+
+  score = Math.min(100, Math.max(0, score));
+  renderScoreResult(score, breakdown, ticker, tStats);
+}
+
+function renderScoreResult(score, breakdown, ticker, tStats) {
+  const el = document.getElementById('scoreResult');
+  el.classList.add('show');
+
+  document.getElementById('scoreNum').textContent = score;
+
+  let color, verdict, sub;
+  if (score >= 80) {
+    color='#00ff88'; verdict='⚡ PREMIUM FLOW';
+    sub='Flusso top tier — priorità massima. Entra con sizing adeguato.';
+  } else if (score >= 60) {
+    color='#10b981'; verdict='🟢 BUON FLUSSO';
+    sub='Flusso di qualità. Valuta l\'ingresso con gestione del rischio.';
+  } else if (score >= 40) {
+    color='#f59e0b'; verdict='🟡 DA MONITORARE';
+    sub='Non agire subito. Aspetta conferme o flussi correlati.';
+  } else {
+    color='#ef4444'; verdict='🔴 SKIP';
+    sub='Il flusso non soddisfa i criteri storici. Evitare.';
+  }
+
+  const circle = document.getElementById('scoreCircle');
+  circle.style.borderColor = color;
+  circle.style.background = color + '12';
+  document.getElementById('scoreNum').style.color = color;
+  const vt = document.getElementById('verdictText');
+  vt.style.color = color;
+  vt.textContent = verdict;
+  document.getElementById('verdictSub').textContent = sub;
+
+  document.getElementById('breakdownBars').innerHTML = breakdown.map(b => `
+    <div class="breakdown-item">
+      <div class="bd-label">${b.label}</div>
+      <div class="bd-bar-track">
+        <div class="bd-bar-fill" style="width:${(b.pts/b.max)*100}%;background:${b.color}"></div>
+      </div>
+      <div class="bd-pts">${b.pts}/${b.max}</div>
+    </div>
+  `).join('');
+
+  // Ticker note
+  let tickerNote = '';
+  if (ticker && tStats) {
+    tickerNote = `<strong style="color:var(--text)">${ticker}</strong> nel tuo storico: ${tStats.n} trade · WR ${pct(tStats.wr,0)} · Avg ${fmtPnl(tStats.avg)} · Best ${fmtPnl(tStats.best)}`;
+  } else if (ticker) {
+    tickerNote = `<strong style="color:var(--text)">${ticker}</strong> non è ancora nel tuo storico — score ticker calcolato su media generale.`;
+  }
+  document.getElementById('tickerNote').innerHTML = tickerNote;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════════════════════════════════
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+  event.target.classList.add('active');
+  document.getElementById('tab-' + name).classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOADER / ERROR
+// ═══════════════════════════════════════════════════════════════════════════════
+function setLoader(show, text) {
+  const l = document.getElementById('loader');
+  if (show) {
+    l.style.display = 'flex';
+    if (text) document.getElementById('loaderText').textContent = text;
+  } else {
+    l.style.display = 'none';
+  }
+}
+function hideLoader() { setLoader(false); }
+function showApp() {
+  document.getElementById('app').style.display = 'block';
+}
+function showError(msg) {
+  const b = document.getElementById('errorBanner');
+  b.style.display = 'block';
+  b.textContent = '⚠️ ' + msg;
+  showApp();
+}
+
+// ── PAGE NAVIGATION ──────────────────────────────────────────────────────────
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.page-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INIT
+// ═══════════════════════════════════════════════════════════════════════════════
+window.addEventListener('load', loadSheetData);
+</script>
+</body>
+</html>
