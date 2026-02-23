@@ -1806,6 +1806,7 @@ async function generateAINarrative() {
     return `fascia premium ${pb}`;
   };
   const timeDesc = hb => {
+    if (!hb || hb === 'N/D') return 'nella fascia oraria identificata';
     if (hb.includes('Pre-Close')) return 'nella finestra pre-chiusura (14:00-15:30 NY)';
     if (hb.includes('Open'))      return "all'apertura di mercato (9:30-10:30 NY)";
     if (hb.includes('Morning'))   return "nella sessione mattutina (10:30-12:00 NY)";
@@ -1836,11 +1837,12 @@ async function generateAINarrative() {
     : '';
 
   // ── DTE insight ────────────────────────────────────────────────────────────
-  const dteNote = top.topDte.includes('LEAPS')
+  const topDtb = top.dtb || '—';
+  const dteNote = topDtb.includes('LEAPS')
     ? "Il DTE molto lungo (LEAPS) indica una posizione strutturale, non speculativa: l'operatore si posiziona per un movimento di mesi, non di giorni."
-    : top.topDte.includes('Short') || top.topDte.includes('Weekly')
+    : (topDtb.includes('Short') || topDtb.includes('Weekly'))
     ? "Il DTE corto indica un profilo tattico: l'operatore cerca movimenti rapidi con scadenza ravvicinata, spesso legato a eventi di breve termine."
-    : `Il DTE tipico (${top.topDte}) suggerisce una visione su scala mensile — né puramente speculativo né strategico di lungo periodo.`;
+    : `Il DTE tipico (${topDtb}) suggerisce una visione su scala mensile.`;
 
   // ── Worst profile warning ──────────────────────────────────────────────────
   const worstNote = worst && worst !== top
@@ -1872,18 +1874,22 @@ async function generateAINarrative() {
   ].filter(Boolean);
 
   // ── Render ─────────────────────────────────────────────────────────────────
-  el.innerHTML = paragraphs
+  try {
+    el.innerHTML = paragraphs
     .map(p => `<p style="margin-bottom:16px;color:var(--text);line-height:1.85">${p}</p>`)
     .join('');
 
   badge.textContent = 'generata · ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
   badge.style.color = 'var(--accent)';
   badge.style.borderColor = 'rgba(0,255,136,0.3)';
-
-  // Update panel title
   const titleEl = document.querySelector('#op_ai_panel .panel-title');
   if (titleEl) {
     titleEl.innerHTML = '🧠 Analisi Operatori — Generata dai Dati Live <span class="panel-badge" id="op_ai_status" style="color:var(--accent)">' + badge.textContent + '</span>';
+  }
+  } catch(err) {
+    el.innerHTML = '<p style="color:var(--red)">Errore generazione analisi: ' + err.message + '</p>';
+    badge.textContent = 'errore';
+    console.error('generateAINarrative error:', err);
   }
 }
 
