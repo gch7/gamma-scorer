@@ -710,7 +710,10 @@ function pnlColor(n) {
 async function loadSheetData() {
   setLoader(true, 'Connessione a Google Sheets...');
   try {
-    const response = await fetch(CSV_URL, { redirect: 'follow' });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000); // 12s timeout
+    const response = await fetch(CSV_URL, { redirect: 'follow', signal: controller.signal });
+    clearTimeout(timeout);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const text = await response.text();
     let rows;
@@ -718,7 +721,10 @@ async function loadSheetData() {
     catch(e) { throw new Error('Risposta non valida dal server: ' + text.slice(0,100)); }
     parseArrayResponse(rows);
   } catch(e) {
-    showError('Impossibile caricare i dati: ' + e.message);
+    const msg = e.name === 'AbortError'
+      ? 'Timeout: Google Sheets non risponde. Riprova tra qualche secondo.'
+      : 'Impossibile caricare i dati: ' + e.message;
+    showError(msg);
     hideLoader();
   }
 }
@@ -850,14 +856,16 @@ function parseArrayResponse(rows) {
   G.trades = trades;
   computeStats();
   renderAll();
-  computeOperators();
-  renderOperators();
-  generateAINarrative();
+  // Show the app immediately — operator analysis runs after
   hideLoader();
   showApp();
   document.getElementById('lastUpdate').textContent =
     'Aggiornato: ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}) +
     ' · ' + new Date().toLocaleDateString('it-IT');
+  // Operator engine — in try-catch so errors never block the main UI
+  try { computeOperators(); } catch(e) { console.error('computeOperators:', e); }
+  try { renderOperators();  } catch(e) { console.error('renderOperators:', e); }
+  generateAINarrative(); // async, already has its own try-catch
 }
 
 // ── CSV fallback parser ───────────────────────────────────────────────────────
@@ -912,14 +920,16 @@ function parseCsvResponse(csvText) {
   G.trades = trades;
   computeStats();
   renderAll();
-  computeOperators();
-  renderOperators();
-  generateAINarrative();
+  // Show the app immediately — operator analysis runs after
   hideLoader();
   showApp();
   document.getElementById('lastUpdate').textContent =
     'Aggiornato: ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'}) +
     ' · ' + new Date().toLocaleDateString('it-IT');
+  // Operator engine — in try-catch so errors never block the main UI
+  try { computeOperators(); } catch(e) { console.error('computeOperators:', e); }
+  try { renderOperators();  } catch(e) { console.error('renderOperators:', e); }
+  generateAINarrative(); // async, already has its own try-catch
 }
 
 
@@ -1737,9 +1747,7 @@ Tono: professionale ma diretto. Usa numeri specifici dai dati. Non inventare nul
     if (!text) throw new Error('Risposta vuota');
 
     // Format the text into styled paragraphs
-    const paras = text.trim().split(/
-
-+/);
+    const paras = text.trim().split(/\n\n+/);
     el.innerHTML = paras.map(p => `<p style="margin-bottom:14px;color:var(--text)">${p.trim()}</p>`).join('');
     badge.textContent = 'aggiornata · ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
     badge.style.color = 'var(--accent)';
@@ -1763,6 +1771,17 @@ function showPage(name, btn) {
 // ═══════════════════════════════════════════════════════════════════════════════
 // INIT
 // ═══════════════════════════════════════════════════════════════════════════════
+
+// ── SAFETY NET: force-hide loader if it's been stuck for 15s ──────────────────
+setTimeout(() => {
+  const loader = document.getElementById('loader');
+  if (loader && loader.style.display !== 'none') {
+    hideLoader();
+    showApp();
+    showError('Connessione lenta o assente. Premi "Aggiorna dati" per riprovare.');
+  }
+}, 15000);
+
 window.addEventListener('load', loadSheetData);
 </script>
 </body>
