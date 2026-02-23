@@ -869,8 +869,10 @@ function parseArrayResponse(rows) {
         : (prezzo - stk) / prezzo * 100;
     }
 
-    if (i <= 5) {
-      console.log(`Row ${i} OPEN raw:`, raw(COL.OPEN), '| parsed hour_ny:', hour_ny.toFixed ? hour_ny.toFixed(2) : hour_ny);
+    if (i >= 1 && i <= 8) {
+      const openRaw = raw(COL.OPEN);
+      console.log(`Row ${i} OPEN col[${COL.OPEN}] raw:`, JSON.stringify(openRaw), 
+                  '→ hour_ny:', isNaN(hour_ny) ? 'NaN' : hour_ny.toFixed(2));
     }
 
     trades.push({ ticker, note, cp, day, pnlPct, bought, dte, hour_ny, otm });
@@ -1474,15 +1476,15 @@ function premBucketOp(b) {
 
 function hourBucketOp(h) {
   if (isNaN(h) || h == null) return null;
-  // Valid US options market hours: 9:30-16:00 ET
-  // If conversion gives something outside 9:00-16:30, something is wrong — skip it
-  if (h < 8 || h > 17) return null; // reject clearly invalid conversions
+  // No hard rejection — log anomalies but still try to bucket
   if (h < 9.5)   return 'Pre-Market';
   if (h < 10.5)  return 'Open (9:30-10:30)';
   if (h < 12)    return 'Morning (10:30-12)';
   if (h < 14)    return 'Midday (12-14)';
   if (h < 15.5)  return 'Pre-Close (14-15:30)';
-  return 'Close (15:30-16:00)';
+  if (h <= 16)   return 'Close (15:30-16:00)';
+  // Outside normal market hours — still include but label it
+  return null; // truly after hours = skip
 }
 
 function dteBucketOp(d) {
@@ -1498,14 +1500,27 @@ function dteBucketOp(d) {
 function computeOperators() {
   const closed = G.trades.filter(t => !isNaN(t.pnlPct) && t.pnlPct !== 0);
 
-  // ── Profile clustering: group by (premBucket × hourBucket × CP) ────────────
+  // ── Diagnose hour data availability ────────────────────────────────────────
+  const tradesWithHour = closed.filter(t => !isNaN(t.hour_ny) && t.hour_ny > 0);
+  const hourCoverage = tradesWithHour.length / Math.max(closed.length, 1);
+  console.log(`Hour coverage: ${tradesWithHour.length}/${closed.length} = ${(hourCoverage*100).toFixed(0)}%`);
+  if (tradesWithHour.length < 5) {
+    console.warn('Low hour coverage — OPEN column may not be a date/time field. Falling back to premium×CP clustering.');
+  }
+
+  // ── Profile clustering: (premBucket × hourBucket × CP) ────────────────────
+  // If hour data not available, fall back to (premBucket × CP) only
+  const useHour = hourCoverage > 0.2; // need at least 20% coverage to trust hours
   const profileMap = {};
   closed.forEach(t => {
     const pb = premBucketOp(t.bought);
-    const hb = hourBucketOp(t.hour_ny);
-    if (!pb || !hb || !t.cp) return;
-    const key = `${pb}||${hb}||${t.cp}`;
-    if (!profileMap[key]) profileMap[key] = { pb, hb, cp: t.cp, trades: [] };
+    if (!pb || !t.cp) return;
+    const hb = useHour ? hourBucketOp(t.hour_ny) : 'N/D';
+    const key = useHour
+      ? (hb ? `${pb}||${hb}||${t.cp}` : null)
+      : `${pb}||${t.cp}`;
+    if (!key) return;
+    if (!profileMap[key]) profileMap[key] = { pb, hb: hb || 'N/D', cp: t.cp, trades: [] };
     profileMap[key].trades.push(t);
   });
 
@@ -1555,6 +1570,8 @@ function computeOperators() {
     hmPrems: HM_PREMS,
     hmData,
     totalClosed: closed.length,
+    useHour,
+    hourCoverage: Math.round(hourCoverage * 100),
   };
 }
 
@@ -1563,7 +1580,7 @@ function computeOperators() {
 // ═══════════════════════════════════════════════════════════════════════════════
 function renderOperators() {
   if (!G.operators) return;
-  const { profiles, hmHours, hmPrems, hmData, totalClosed } = G.operators;
+  const { profiles, hmHours, hmPrems, hmData, totalClosed, useHour, hourCoverage } = G.operators;
 
   // ── KPIs ───────────────────────────────────────────────────────────────────
   document.getElementById('op_k_total').textContent = totalClosed;
@@ -1643,12 +1660,21 @@ function renderOperators() {
       <div class="op-note" style="border-left-color:${bc.fg}">
         Profilo con <strong>${p.n}</strong> trade chiusi su <strong>${p.tickers.length}</strong> ticker diversi.
         Mediana P&L: ${p.med >= 0 ? '+' : ''}${p.med.toFixed(0)}%.
-        Finestra operativa: <strong>${p.hb}</strong> con premium tipico <strong>${p.pb}</strong>.
+        ${p.hb !== 'N/D' ? `Finestra operativa: <strong>${p.hb}</strong> con premium <strong>${p.pb}</strong>.` : `Premium tipico <strong>${p.pb}</strong>. Orario non disponibile — aggiungere orario in formato HH:MM nella colonna OPEN.`}
       </div>
     </div>`;
   }).join('');
 
   // ── Live heatmap ────────────────────────────────────────────────────────────
+  const hmPanel = document.getElementById('op_heatmap_panel');
+  if (!useHour && hmPanel) {
+    const note = document.createElement('div');
+    note.style.cssText = 'padding:16px;font-size:13px;color:var(--yellow);background:rgba(245,158,11,0.08);border-radius:8px;margin-bottom:12px;border-left:3px solid var(--yellow)';
+    note.innerHTML = '⚠️ <strong>Orari non disponibili</strong> — La colonna OPEN del tuo Google Sheet non contiene dati orari leggibili (copertura: ' + hourCoverage + '%). La heatmap richiede orari. I profili sopra sono calcolati su premium × direzione × ticker (senza orario).';
+    const tableWrap = hmPanel.querySelector('[style*="overflow"]');
+    if (tableWrap) hmPanel.insertBefore(note, tableWrap);
+  }
+
   const thead = document.getElementById('op_heatmap_head');
   const tbody = document.getElementById('op_heatmap_body');
 
@@ -1726,6 +1752,7 @@ async function generateAINarrative() {
     return;
   }
 
+  const { useHour: hasHour, hourCoverage: hCov } = G.operators;
   const top   = profiles[0];
   const worst = [...profiles].sort((a,b) => a.wr - b.wr).find(p => p.wr < 65 && p.n >= 4) || profiles[profiles.length-1];
   const p2    = profiles[1];
