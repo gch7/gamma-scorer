@@ -576,13 +576,13 @@
     <!-- AI NARRATIVE PANEL -->
     <div class="panel" id="op_ai_panel" style="margin-bottom:20px;border-color:rgba(79,163,255,0.3);min-height:120px">
       <div class="panel-title">
-        🤖 Analisi AI — Aggiornata sui Dati Live
+        🧠 Analisi — Generata dai Dati Live
         <span class="panel-badge" id="op_ai_status">in elaborazione...</span>
       </div>
       <div id="op_ai_text" style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:8px">
         <div class="loading-pulse" style="display:flex;gap:8px;align-items:center">
           <div style="width:8px;height:8px;border-radius:50%;background:var(--accent3);animation:loadPulse 1.2s infinite"></div>
-          <span>Claude sta leggendo i dati aggiornati dal Google Sheet...</span>
+          <span>Elaborazione insights dai dati live...</span>
         </div>
       </div>
     </div>
@@ -763,36 +763,58 @@ function parseArrayResponse(rows) {
   };
   console.log('Colonne mappate:', COL);
 
-  // Parse Apps Script Date → hour in Milan time → subtract 6h for NY
-  const parseMilanDate = v => {
-    if (v == null || v === '') return null;
-    // Apps Script serializes Date as "Date(2024,7,5,13,46,0)" (0-indexed month)
-    const m = String(v).match(/Date\((\d+),(\d+),(\d+),(\d+),(\d+)/);
-    if (m) {
-      const [,yr,mo,dy,hr,mn] = m.map(Number);
-      return { h: hr, min: mn }; // Milan time
-    }
-    // Fallback: string like "05/08/2024 13:46" or "05/08/24 01.46 PM"
-    const s = String(v);
-    const m2 = s.match(/(\d{1,2})[.:](\d{2})\s*(AM|PM)?/i);
-    if (m2) {
-      let h = parseInt(m2[1]);
-      const mn = parseInt(m2[2]);
-      if (m2[3]) { // 12h format
-        if (m2[3].toUpperCase()==='PM' && h<12) h+=12;
-        if (m2[3].toUpperCase()==='AM' && h===12) h=0;
-      }
-      return { h, min: mn };
-    }
-    return null;
-  };
-  const milanToNY = t => t ? ((t.h + t.min/60) - 6 + 24) % 24 : NaN;
+  // Parse OPEN column → NY market hour (float, e.g. 15.77 = 15:46)
+  // Apps Script returns dates as UTC ISO strings in JSON, e.g. "2024-08-05T19:46:00.000Z"
+  // Milan CEST (UTC+2) 21:46 → UTC 19:46 → ET (EDT UTC-4) 15:46 ✓
+  // Fallback: if string format like "05/08/2024 22.46" or "22.46", extract time carefully.
+  const parseToNYHour = v => {
+    if (v == null || v === '') return NaN;
+    const s = String(v).trim();
 
-  // Smart value parser: handles Apps Script returning numbers directly
-  // - Percentage cells come as decimals: 0.47 = 47%, 3.37 = 337%, -1 = -100%
-  // - Monetary cells come as integers: 4019318
-  // We distinguish by context (pct vs money)
-  const parsePercent = v => {
+    // ── Case 1: ISO UTC from Apps Script JSON ("2024-08-05T19:46:00.000Z") ──
+    if (s.length > 10 && s.includes('T')) {
+      try {
+        const d = new Date(s);
+        if (!isNaN(d.getTime())) {
+          const utcH = d.getUTCHours(), utcM = d.getUTCMinutes();
+          const mon  = d.getUTCMonth() + 1; // 1-12
+          const offset = (mon >= 3 && mon <= 11) ? -4 : -5; // EDT or EST
+          return ((utcH + utcM / 60) + offset + 24) % 24;
+        }
+      } catch(e) {}
+    }
+
+    // ── Case 2: Raw string from sheet ──────────────────────────────────────────
+    // Formats seen: "05/08/2024 22.46", "05.08.2024 22:46", "22.46", "22:46"
+    // Strategy: strip leading date portion (DD/MM/YYYY or DD.MM.YYYY) first,
+    // then extract HH:MM or HH.MM from what's left.
+
+    let timeStr = s;
+
+    // Remove date prefix like "05/08/2024 " or "05.08.24 " (6-10 digit date)
+    // Pattern: 1-2 digits separator 1-2 digits separator 2-4 digits then space
+    timeStr = timeStr.replace(/^\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4}\s*/, '');
+
+    // Now extract HH:MM or HH.MM — hour must be 0-23, minute 0-59
+    const tm = timeStr.match(/^(\d{1,2})[.:](\d{2})\s*(AM|PM)?/i);
+    if (tm) {
+      let h = parseInt(tm[1]);
+      const mn = parseInt(tm[2]);
+      // Validate: market hours in Milan are 15:30–22:00 (ET 9:30–16:00)
+      if (h >= 0 && h <= 23 && mn >= 0 && mn <= 59) {
+        if (tm[3]) {
+          if (tm[3].toUpperCase() === 'PM' && h < 12) h += 12;
+          if (tm[3].toUpperCase() === 'AM' && h === 12) h = 0;
+        }
+        // Milan → NY: always -6h (CET winter: UTC+1-5=−6, CEST summer: UTC+2−4=−6)
+        return ((h + mn / 60) - 6 + 24) % 24;
+      }
+    }
+
+    return NaN;
+  };
+
+    const parsePercent = v => {
     if (v == null || v === '') return NaN;
     if (typeof v === 'number') {
       // Apps Script returns % cells as decimals (e.g. 0.47 for 47%)
@@ -837,7 +859,7 @@ function parseArrayResponse(rows) {
     const day     = str(COL.g).toLowerCase();
     const prezzo  = parseMoney(raw(COL.PREZZO));
     const stk     = parseMoney(raw(COL.STK));
-    const hour_ny = milanToNY(parseMilanDate(raw(COL.OPEN)));
+    const hour_ny = parseToNYHour(raw(COL.OPEN));
 
     // OTM %
     let otm = NaN;
@@ -847,7 +869,9 @@ function parseArrayResponse(rows) {
         : (prezzo - stk) / prezzo * 100;
     }
 
-    if (i <= 3) console.log(`Row ${i}:`, { ticker, pnlPct, bought, dte, note, cp, day, hour_ny, otm });
+    if (i <= 5) {
+      console.log(`Row ${i} OPEN raw:`, raw(COL.OPEN), '| parsed hour_ny:', hour_ny.toFixed ? hour_ny.toFixed(2) : hour_ny);
+    }
 
     trades.push({ ticker, note, cp, day, pnlPct, bought, dte, hour_ny, otm });
   }
@@ -1450,14 +1474,15 @@ function premBucketOp(b) {
 
 function hourBucketOp(h) {
   if (isNaN(h) || h == null) return null;
+  // Valid US options market hours: 9:30-16:00 ET
+  // If conversion gives something outside 9:00-16:30, something is wrong — skip it
+  if (h < 8 || h > 17) return null; // reject clearly invalid conversions
   if (h < 9.5)   return 'Pre-Market';
   if (h < 10.5)  return 'Open (9:30-10:30)';
   if (h < 12)    return 'Morning (10:30-12)';
   if (h < 14)    return 'Midday (12-14)';
   if (h < 15.5)  return 'Pre-Close (14-15:30)';
-  if (h < 16)    return 'Power Hour';
-  if (h < 17)    return 'Close';
-  return 'After Hours';
+  return 'Close (15:30-16:00)';
 }
 
 function dteBucketOp(d) {
@@ -1507,7 +1532,7 @@ function computeOperators() {
     .sort((a,b) => (b.wr * Math.max(b.avg,0)) - (a.wr * Math.max(a.avg,0)));
 
   // ── Live heatmap: (hourBucket × premBucket) WR matrix ─────────────────────
-  const HM_HOURS = ['Pre-Market','Open (9:30-10:30)','Morning (10:30-12)','Midday (12-14)','Pre-Close (14-15:30)'];
+  const HM_HOURS = ['Pre-Market','Open (9:30-10:30)','Morning (10:30-12)','Midday (12-14)','Pre-Close (14-15:30)','Close (15:30-16:00)'];
   const HM_PREMS = ['<300K','300K-600K','600K-1M','1M-1.5M','1.5M-2.5M','2.5M-4M','4M-7M','12M+'];
   const hmData = {};
   HM_HOURS.forEach(h => {
@@ -1683,82 +1708,129 @@ function renderOperators() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// AI NARRATIVE — Claude legge i profili calcolati e scrive l'analisi
+// INSIGHTS ENGINE — Generates Italian analysis text from live computed data
+// (No external API needed — works fully on GitHub Pages)
 // ═══════════════════════════════════════════════════════════════════════════════
 async function generateAINarrative() {
-  if (!G.operators || !G.operators.topProfilesForAI) return;
-
-  const el = document.getElementById('op_ai_text');
+  const el    = document.getElementById('op_ai_text');
   const badge = document.getElementById('op_ai_status');
-  if (!el || !badge) return;
+  if (!el || !badge || !G.operators) return;
 
-  // Build summary of computed profiles for Claude
-  const profiles = G.operators.topProfilesForAI;
-  const total = G.operators.totalClosed;
+  // Small delay to let render complete first
+  await new Promise(r => setTimeout(r, 300));
 
-  const profileSummary = profiles.map((p, i) => ({
-    operatore: ['A','B','C','D','E'][i],
-    orario_ny: p.hb,
-    premium: p.pb,
-    direzione: p.cp === 'C' ? 'CALL' : 'PUT',
-    dte_tipico: p.topDte,
-    n_trade: p.n,
-    ticker_principali: p.tickers,
-    win_rate: p.wr.toFixed(1) + '%',
-    avg_pnl: (p.avg >= 0 ? '+' : '') + p.avg.toFixed(0) + '%',
-    median_pnl: (p.med >= 0 ? '+' : '') + p.med.toFixed(0) + '%',
-  }));
+  const { profiles, totalClosed } = G.operators;
+  if (!profiles || !profiles.length) {
+    el.innerHTML = '<p style="color:var(--muted);font-style:italic">Dati insufficienti per generare l\'analisi.</p>';
+    badge.textContent = 'dati insufficienti';
+    return;
+  }
 
-  const prompt = `Sei un analista di opzioni esperto. Hai davanti i profili comportamentali di possibili operatori istituzionali identificati attraverso clustering cross-ticker su ${total} trade reali di BlackBox Stocks.
+  const top   = profiles[0];
+  const worst = [...profiles].sort((a,b) => a.wr - b.wr).find(p => p.wr < 65 && p.n >= 4) || profiles[profiles.length-1];
+  const p2    = profiles[1];
+  const p3    = profiles[2];
 
-DATI AGGIORNATI DAL GOOGLE SHEETS (${new Date().toLocaleDateString('it-IT')}):
-${JSON.stringify(profileSummary, null, 2)}
+  // ── Helper formatters ──────────────────────────────────────────────────────
+  const pctStr  = n  => (n >= 0 ? '+' : '') + n.toFixed(0) + '%';
+  const wrStr   = wr => wr.toFixed(0) + '%';
+  const strong  = s  => `<strong style="color:var(--text)">${s}</strong>`;
+  const accent  = s  => `<strong style="color:var(--accent)">${s}</strong>`;
+  const accentN = s  => `<strong style="color:var(--accent3)">${s}</strong>`;
+  const warn    = s  => `<strong style="color:var(--red)">${s}</strong>`;
 
-Metodologia: ogni profilo raggruppa trade su TICKER DIVERSI con lo stesso range di premium, la stessa finestra oraria (NY time, −6h da Milano), la stessa direzione. Questo suggerisce che è la stessa mano che opera in modo ripetibile.
+  // ── Build qualitative descriptors ──────────────────────────────────────────
+  const wrQuality = wr => wr >= 95 ? 'eccezionale' : wr >= 90 ? 'molto elevato' : wr >= 80 ? 'solido' : wr >= 70 ? 'discreto' : 'basso';
+  const premDesc  = pb => {
+    if (pb.includes('12M+'))    return 'capitalizzazione molto elevata ($12M+), tipica di fondi istituzionali';
+    if (pb.includes('4M-7M'))   return 'capitalizzazione alta ($4M-7M), profilo istituzionale';
+    if (pb.includes('2.5M-4M')) return 'capitalizzazione medio-alta ($2.5M-4M)';
+    if (pb.includes('1.5M-2.5M')) return 'capitalizzazione media ($1.5M-2.5M)';
+    if (pb.includes('1M-1.5M')) return 'capitalizzazione nella fascia $1M-1.5M';
+    return `fascia premium ${pb}`;
+  };
+  const timeDesc = hb => {
+    if (hb.includes('Pre-Close')) return 'nella finestra pre-chiusura (14:00-15:30 NY)';
+    if (hb.includes('Open'))      return "all'apertura di mercato (9:30-10:30 NY)";
+    if (hb.includes('Morning'))   return "nella sessione mattutina (10:30-12:00 NY)";
+    if (hb.includes('Midday'))    return 'nella sessione di metà giornata (12:00-14:00 NY)';
+    if (hb.includes('Close'))     return 'alla chiusura di mercato (15:30-16:00 NY)';
+    return `nella fascia ${hb}`;
+  };
 
-Scrivi un'analisi concisa in italiano (4-5 paragrafi) che:
-1. Identifica il profilo più affidabile e perché è significativo statisticamente
-2. Spiega le implicazioni operative per chi vuole seguire questi flussi
-3. Evidenzia eventuali pattern o anomalie interessanti nei dati
-4. Menziona quale profilo evitare e perché
-5. Aggiungi una considerazione su come questi pattern potrebbero evolvere
+  // ── Check statistical significance ─────────────────────────────────────────
+  const highConf = top.n >= 20 && top.tickers.length >= 4;
+  const medConf  = top.n >= 10;
+  const confNote = highConf
+    ? 'con alta significatività statistica'
+    : medConf
+    ? 'con sufficiente base statistica'
+    : 'con campione ancora limitato — da monitorare';
 
-Tono: professionale ma diretto. Usa numeri specifici dai dati. Non inventare nulla — analizza solo quello che hai.`;
+  // ── Cross-ticker consistency ────────────────────────────────────────────────
+  const crossStrength = top.tickers.length >= 6
+    ? "La distribuzione su molti ticker diversi esclude la possibilità che si tratti di un pattern specifico del singolo asset."
+    : top.tickers.length >= 4
+    ? "Il profilo è confermato su più ticker, riducendo il rischio di bias da singolo asset."
+    : "Il campione è ancora concentrato su pochi ticker — espandere il dataset rafforzerà la conclusione.";
 
-  el.innerHTML = `<div class="loading-pulse" style="display:flex;gap:8px;align-items:center">
-    <div style="width:8px;height:8px;border-radius:50%;background:var(--accent3);animation:loadPulse 1.2s infinite"></div>
-    <span>Claude sta analizzando ${total} trade aggiornati...</span>
-  </div>`;
-  badge.textContent = 'analisi in corso...';
+  // ── Compare top 2 profiles ─────────────────────────────────────────────────
+  const compareNote = p2
+    ? `In secondo piano emerge il profilo ${accentN(p2.pb + ' · ' + p2.hb)} con ${strong(wrStr(p2.wr))} WR e ${strong(pctStr(p2.avg))} avg su ${p2.n} trade (ticker: ${p2.tickers.slice(0,3).join(', ')}). ${p2.wr > 85 ? 'Anche questo profilo merita attenzione sistematica.' : 'Profilo secondario da tenere monitorato.'}`
+    : '';
 
-  try {
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
-    const data = await res.json();
-    const text = data.content?.map(b => b.text || '').join('') || '';
+  // ── DTE insight ────────────────────────────────────────────────────────────
+  const dteNote = top.topDte.includes('LEAPS')
+    ? "Il DTE molto lungo (LEAPS) indica una posizione strutturale, non speculativa: l'operatore si posiziona per un movimento di mesi, non di giorni."
+    : top.topDte.includes('Short') || top.topDte.includes('Weekly')
+    ? "Il DTE corto indica un profilo tattico: l'operatore cerca movimenti rapidi con scadenza ravvicinata, spesso legato a eventi di breve termine."
+    : `Il DTE tipico (${top.topDte}) suggerisce una visione su scala mensile — né puramente speculativo né strategico di lungo periodo.`;
 
-    if (!text) throw new Error('Risposta vuota');
+  // ── Worst profile warning ──────────────────────────────────────────────────
+  const worstNote = worst && worst !== top
+    ? `Sul fronte opposto, il profilo ${warn(worst.pb + ' · ' + worst.hb)} mostra un WR di soli ${warn(wrStr(worst.wr))} su ${worst.n} osservazioni (avg ${pctStr(worst.avg)}). ${worst.wr < 50 ? "Un WR sotto il 50% equivale a peggio di un lancio di moneta — evitare categoricamente." : 'Nonostante non catastrofico, questo profilo sottoperforma significativamente la media del dataset e non giustifica il rischio.'}`
+    : '';
 
-    // Format the text into styled paragraphs
-    const paras = text.trim().split(/\n\n+/);
-    el.innerHTML = paras.map(p => `<p style="margin-bottom:14px;color:var(--text)">${p.trim()}</p>`).join('');
-    badge.textContent = 'aggiornata · ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
-    badge.style.color = 'var(--accent)';
-  } catch(e) {
-    el.innerHTML = `<p style="color:var(--muted);font-style:italic">
-      Analisi AI non disponibile (${e.message}). I profili calcolati mostrano dati live accurati.
-    </p>`;
-    badge.textContent = 'offline';
-    console.error('AI narrative error:', e);
+  // ── Evolution note ─────────────────────────────────────────────────────────
+  const total = totalClosed;
+  const evolutionNote = total >= 300
+    ? `Con ${strong(total + ' trade')} nel dataset, i pattern identificati hanno raggiunto una base statistica robusta. L'aggiornamento progressivo del Google Sheet affinerà ulteriormente i profili — in particolare le fasce con n<10 potrebbero consolidarsi o cambiare ranking man mano che il campione cresce.`
+    : `Il dataset conta ${strong(total + ' trade')}: una base già utile, ma aggiungendo osservazioni i profili con bassa numerosità (n<10) diventeranno più affidabili. Monitorare in particolare se i profili "After Hours" di mercato italiano si riallineano dopo la correzione degli orari.`;
+
+  // ── Assemble paragraphs ─────────────────────────────────────────────────────
+  const paragraphs = [
+    // Para 1 — Top profile
+    `Dall'analisi comportamentale cross-ticker di ${strong(total + ' trade chiusi')} emergono ${strong(profiles.length + ' profili distinti')} con sufficiente numerosità e diversificazione per ticker. Il profilo dominante è ${accent(top.pb + ' · ' + top.hb)} — ${strong(top.n + ' trade')} su ${strong(top.tickers.length + ' ticker diversi')} (${top.tickers.slice(0,5).join(', ')}${top.tickers.length > 5 ? '...' : ''}) con Win Rate ${accent(wrStr(top.wr))} e average P&L ${accent(pctStr(top.avg))}, ${confNote}. La caratteristica distintiva è la ${premDesc(top.pb)} eseguita ${timeDesc(top.hb)}.`,
+
+    // Para 2 — What it means + DTE
+    `${dteNote} ${crossStrength} ${compareNote}`,
+
+    // Para 3 — Operational implications
+    `In termini operativi, quando si identifica un flusso con ${strong(top.pb)} in fascia ${strong(top.hb)}, la probabilità storica di chiudere in profitto è del ${accent(wrStr(top.wr))} con rendimento medio ${accent(pctStr(top.avg))}. Questo non è un segnale da filtrare ulteriormente — va preso così com'è. La forza del profilo deriva precisamente dalla sua ripetibilità meccanica: l'operatore non cambia finestra oraria o range di premium tra un trade e l'altro, il che rende la firma riconoscibile.`,
+
+    // Para 4 — Warning
+    worstNote,
+
+    // Para 5 — Evolution
+    evolutionNote,
+  ].filter(Boolean);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
+  el.innerHTML = paragraphs
+    .map(p => `<p style="margin-bottom:16px;color:var(--text);line-height:1.85">${p}</p>`)
+    .join('');
+
+  badge.textContent = 'generata · ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+  badge.style.color = 'var(--accent)';
+  badge.style.borderColor = 'rgba(0,255,136,0.3)';
+
+  // Update panel title
+  const titleEl = document.querySelector('#op_ai_panel .panel-title');
+  if (titleEl) {
+    titleEl.innerHTML = '🧠 Analisi Operatori — Generata dai Dati Live <span class="panel-badge" id="op_ai_status" style="color:var(--accent)">' + badge.textContent + '</span>';
   }
 }
+
 
 // ── PAGE NAVIGATION ──────────────────────────────────────────────────────────
 function showPage(name, btn) {
