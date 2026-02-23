@@ -587,6 +587,20 @@
       </div>
     </div>
 
+    <!-- DEBUG PANEL: shows raw OPEN values so you can verify parsing -->
+    <div id="op_debug_panel" class="panel" style="margin-bottom:20px;border-color:rgba(245,158,11,0.5);display:none">
+      <div class="panel-title" style="color:var(--yellow)">
+        🔬 Debug Parser Orari — Colonna OPEN
+        <button onclick="document.getElementById('op_debug_panel').style.display='none'" 
+                style="float:right;background:none;border:none;color:var(--muted);cursor:pointer;font-size:12px">✕ chiudi</button>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-bottom:12px">
+        Valori raw dei primi 8 trade dalla colonna OPEN. <strong style="color:var(--yellow)">Condividi questo screenshot per sistemare il parser.</strong>
+      </div>
+      <div id="op_debug_table" style="overflow-x:auto;font-family:'Space Mono',monospace;font-size:11px"></div>
+      <div id="op_debug_summary" style="margin-top:12px;font-size:12px;color:var(--muted)"></div>
+    </div>
+
     <!-- OPERATOR PROFILES — live rendered -->
     <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;letter-spacing:2px">
       👤 PROFILI COMPORTAMENTALI — Calcolati in tempo reale dai dati live
@@ -767,51 +781,95 @@ function parseArrayResponse(rows) {
   // Apps Script returns dates as UTC ISO strings in JSON, e.g. "2024-08-05T19:46:00.000Z"
   // Milan CEST (UTC+2) 21:46 → UTC 19:46 → ET (EDT UTC-4) 15:46 ✓
   // Fallback: if string format like "05/08/2024 22.46" or "22.46", extract time carefully.
-  const parseToNYHour = v => {
+  // ── Robust time parser: tries every known Apps Script date format ────────────
+  // Returns ET hour as float (e.g. 15.77 = 15:46 ET). Stores diagnostics in G._parseLog.
+  G._parseLog = []; // reset each compute
+
+  const tryParseToMilan = v => {
+    // Returns Milan hour (float) or NaN. All roads lead to Milan → then -6h → ET.
     if (v == null || v === '') return NaN;
     const s = String(v).trim();
 
-    // ── Case 1: ISO UTC from Apps Script JSON ("2024-08-05T19:46:00.000Z") ──
-    if (s.length > 10 && s.includes('T')) {
+    // ① ISO UTC string: "2024-08-05T19:46:00.000Z" (Apps Script JSON.stringify of Date)
+    if (s.includes('T') && s.includes(':')) {
       try {
         const d = new Date(s);
         if (!isNaN(d.getTime())) {
-          const utcH = d.getUTCHours(), utcM = d.getUTCMinutes();
-          const mon  = d.getUTCMonth() + 1; // 1-12
-          const offset = (mon >= 3 && mon <= 11) ? -4 : -5; // EDT or EST
-          return ((utcH + utcM / 60) + offset + 24) % 24;
+          const mon = d.getUTCMonth() + 1;
+          const mOff = (mon >= 3 && mon <= 10) ? 2 : 1; // CEST=+2, CET=+1
+          return ((d.getUTCHours() + mOff) % 24) + d.getUTCMinutes() / 60;
         }
       } catch(e) {}
     }
 
-    // ── Case 2: Raw string from sheet ──────────────────────────────────────────
-    // Formats seen: "05/08/2024 22.46", "05.08.2024 22:46", "22.46", "22:46"
-    // Strategy: strip leading date portion (DD/MM/YYYY or DD.MM.YYYY) first,
-    // then extract HH:MM or HH.MM from what's left.
+    // ② Non-ISO datetime: "2025-02-05 21:46:00" (year-first without T)
+    const mYMD = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})[T\s](\d{1,2}):(\d{2})/);
+    if (mYMD) {
+      const mon = parseInt(mYMD[2]);
+      const h = parseInt(mYMD[4]), mn = parseInt(mYMD[5]);
+      // This could be local (Milan) already — Apps Script sometimes formats in local TZ
+      return h + mn / 60;
+    }
 
-    let timeStr = s;
+    // ③ Excel serial number (float from Apps Script when date cell read as number)
+    //    e.g. 45308.90625 where integer = date, fraction = time
+    const num = typeof v === 'number' ? v : parseFloat(s);
+    if (!isNaN(num) && num > 40000 && num < 60000) {
+      const frac = num - Math.floor(num);
+      const totalMin = Math.round(frac * 1440); // 24*60
+      return Math.floor(totalMin / 60) + (totalMin % 60) / 60;
+    }
 
-    // Remove date prefix like "05/08/2024 " or "05.08.24 " (6-10 digit date)
-    // Pattern: 1-2 digits separator 1-2 digits separator 2-4 digits then space
-    timeStr = timeStr.replace(/^\d{1,2}[\/.]\d{1,2}[\/.]\d{2,4}\s*/, '');
+    // ④ Pure fraction-of-day (e.g. 0.906944 = 21:46)
+    if (!isNaN(num) && num > 0 && num < 1) {
+      const totalMin = Math.round(num * 1440);
+      return Math.floor(totalMin / 60) + (totalMin % 60) / 60;
+    }
 
-    // Now extract HH:MM or HH.MM — hour must be 0-23, minute 0-59
-    const tm = timeStr.match(/^(\d{1,2})[.:](\d{2})\s*(AM|PM)?/i);
-    if (tm) {
-      let h = parseInt(tm[1]);
-      const mn = parseInt(tm[2]);
-      // Validate: market hours in Milan are 15:30–22:00 (ET 9:30–16:00)
-      if (h >= 0 && h <= 23 && mn >= 0 && mn <= 59) {
-        if (tm[3]) {
-          if (tm[3].toUpperCase() === 'PM' && h < 12) h += 12;
-          if (tm[3].toUpperCase() === 'AM' && h === 12) h = 0;
+    // ⑤ Italian date-time string: "05/08/2024 21:46" or "05.08.2024 21.46"
+    //    or "05/08/24 21.46" — strip the date part first
+    let ts = s.replace(/^\d{1,2}[.\/\-]\d{1,2}[.\/\-]\d{2,4}\s*/, '');
+    // Also try DD/MM without year: "05/08 21:46"
+    if (ts === s) ts = s.replace(/^\d{1,2}[.\/]\d{1,2}\s+/, '');
+
+    // ⑥ Now extract time: HH:MM, HH.MM, HH:MM:SS
+    const mT = ts.match(/^(\d{1,2})[.:\s](\d{2})(?:[:.]\d{2})?\s*(AM|PM)?/i);
+    if (mT) {
+      let h = parseInt(mT[1]), mn = parseInt(mT[2]);
+      if (h <= 23 && mn <= 59) {
+        if (mT[3]) {
+          if (mT[3].toUpperCase() === 'PM' && h < 12) h += 12;
+          if (mT[3].toUpperCase() === 'AM' && h === 12) h = 0;
         }
-        // Milan → NY: always -6h (CET winter: UTC+1-5=−6, CEST summer: UTC+2−4=−6)
-        return ((h + mn / 60) - 6 + 24) % 24;
+        return h + mn / 60;
       }
     }
 
+    // ⑦ Pure time with no date prefix: "21:46" "21.46"
+    const mPure = s.match(/^(\d{1,2})[.:](\d{2})$/);
+    if (mPure) {
+      const h = parseInt(mPure[1]), mn = parseInt(mPure[2]);
+      if (h <= 23 && mn <= 59) return h + mn / 60;
+    }
+
     return NaN;
+  };
+
+  const parseToNYHour = v => {
+    const milanH = tryParseToMilan(v);
+    // Milan → NY: -6h (both CET→EST and CEST→EDT give exactly -6h)
+    const nyH = isNaN(milanH) ? NaN : ((milanH - 6) + 24) % 24;
+    // Log first 8 for debug panel
+    if (G._parseLog.length < 8) {
+      G._parseLog.push({
+        raw: v == null ? '(null)' : String(v).slice(0, 60),
+        type: typeof v,
+        milanH: isNaN(milanH) ? 'NaN' : milanH.toFixed(2),
+        nyH: isNaN(nyH) ? 'NaN' : nyH.toFixed(2),
+        valid: !isNaN(nyH) && nyH >= 9.25 && nyH <= 16.25
+      });
+    }
+    return nyH;
   };
 
     const parsePercent = v => {
@@ -1583,6 +1641,35 @@ function renderOperators() {
   const { profiles, hmHours, hmPrems, hmData, totalClosed, useHour, hourCoverage } = G.operators;
 
   // ── KPIs ───────────────────────────────────────────────────────────────────
+  // ── Populate debug panel ────────────────────────────────────────────────────
+  const debugPanel = document.getElementById('op_debug_panel');
+  const debugTable = document.getElementById('op_debug_table');
+  const debugSum   = document.getElementById('op_debug_summary');
+  if (G._parseLog && G._parseLog.length > 0 && debugTable) {
+    debugPanel.style.display = 'block';
+    const rows = G._parseLog.map(r => {
+      const rawDisp = String(r.raw).replace(/</g,'&lt;').slice(0, 55);
+      const nyDisp  = r.nyH === 'NaN' ? '<span style="color:var(--red)">NaN ❌</span>' : 
+                      r.valid ? `<span style="color:var(--accent)">${r.nyH} ET ✓</span>` :
+                      `<span style="color:var(--yellow)">${r.nyH} ET ⚠</span>`;
+      return `<tr>
+        <td style="padding:4px 8px;color:var(--muted)">${r.type}</td>
+        <td style="padding:4px 8px;color:var(--text);max-width:300px;word-break:break-all">${rawDisp}</td>
+        <td style="padding:4px 8px;color:var(--yellow)">${r.milanH === 'NaN' ? '❌' : r.milanH + 'h Milan'}</td>
+        <td style="padding:4px 8px">${nyDisp}</td>
+      </tr>`;
+    }).join('');
+    debugTable.innerHTML = `<table style="width:100%;border-collapse:collapse">
+      <thead><tr>
+        <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:10px">tipo</th>
+        <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:10px">valore raw dalla colonna OPEN</th>
+        <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:10px">Milan</th>
+        <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:10px">NY ET</th>
+      </tr></thead><tbody>${rows}</tbody></table>`;
+    const valid = G._parseLog.filter(r => r.valid).length;
+    if (debugSum) debugSum.textContent = `${valid}/${G._parseLog.length} orari validi (fascia 9:15-16:15 ET). ${valid === 0 ? 'Parser non riconosce il formato — condividi screenshot.' : valid < G._parseLog.length ? 'Parsing parziale.' : 'Parsing OK.'}`;
+  }
+
   document.getElementById('op_k_total').textContent = totalClosed;
   document.getElementById('op_k_profiles').textContent = profiles.length;
   const topP = profiles[0];
