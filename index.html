@@ -348,8 +348,8 @@
 
   <!-- PAGE NAV -->
   <div class="page-nav">
-    <button class="page-btn active" onclick="showPage('scorer')">⚡ Flow Scorer</button>
-    <button class="page-btn" onclick="showPage('operatori')">👤 Analisi Operatori</button>
+    <button class="page-btn active" onclick="showPage('scorer',this)">⚡ Flow Scorer</button>
+    <button class="page-btn" onclick="showPage('operatori',this)">👤 Analisi Operatori</button>
   </div>
 
   <!-- PAGE: SCORER -->
@@ -565,97 +565,61 @@
 
   <!-- PAGE: ANALISI OPERATORI -->
   <div class="page" id="page-operatori">
-    <div class="stats-bar" style="margin-bottom:28px">
-      <div class="stat-card"><div class="stat-label">Trade nel campione</div><div class="stat-value c-accent">400</div><div class="stat-sub">storico reale · orari NY</div></div>
-      <div class="stat-card"><div class="stat-label">Operatori identificati</div><div class="stat-value c-accent3">3</div><div class="stat-sub">profili comportamentali distinti</div></div>
-      <div class="stat-card"><div class="stat-label">Miglior profilo WR</div><div class="stat-value c-accent">100%</div><div class="stat-sub">Pre-Close Whale · n=17</div></div>
-      <div class="stat-card"><div class="stat-label">Coppie cross-ticker</div><div class="stat-value c-green">3.600+</div><div class="stat-sub">similarità comportamentale ≥7/14</div></div>
+    <!-- KPI Bar — live -->
+    <div class="stats-bar" style="margin-bottom:28px" id="op_kpi_bar">
+      <div class="stat-card"><div class="stat-label">Trade analizzati</div><div class="stat-value c-accent" id="op_k_total">—</div><div class="stat-sub">storico reale · orari NY</div></div>
+      <div class="stat-card"><div class="stat-label">Profili distinti</div><div class="stat-value c-accent3" id="op_k_profiles">—</div><div class="stat-sub">premium × orario × direzione</div></div>
+      <div class="stat-card"><div class="stat-label">Miglior WR profilo</div><div class="stat-value c-accent" id="op_k_bestwr">—</div><div class="stat-sub" id="op_k_bestwr_sub">—</div></div>
+      <div class="stat-card"><div class="stat-label">Avg P&L top profilo</div><div class="stat-value c-green" id="op_k_bestavg">—</div><div class="stat-sub">su ticker diversi</div></div>
     </div>
-    <div class="panel" style="margin-bottom:20px;border-color:rgba(0,255,136,0.2)">
-      <div class="panel-title">🧠 Metodologia — Come abbiamo identificato gli operatori</div>
-      <p style="font-size:13px;color:var(--muted);line-height:1.8">Invece di cercare lo stesso operatore sullo stesso ticker, abbiamo cercato il suo <strong style="color:var(--text)">comportamento</strong> attraverso ticker diversi. Un fondo istituzionale non ripete lo stesso ticker ogni settimana — ripete la sua <em>firma operativa</em>: stesso range di premium, stessa finestra oraria, stesso tipo di strike. Abbiamo assegnato uno <strong style="color:var(--text)">score di similarità 0–14</strong> ad ogni coppia di trade su ticker diversi pesando premium (×3), orario NY (×3), DTE (×2), OTM distance (×2), direzione (×1) e stessa data (×3). Sopra soglia 7 emergono <strong style="color:var(--accent)">3 cluster comportamentali netti</strong>.</p>
-    </div>
-    <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;letter-spacing:2px">👤 PROFILI OPERATORI</div>
-    <div class="op-grid">
-      <div class="op-card" style="border-color:rgba(0,255,136,0.3)">
-        <div class="op-card-header"><div class="op-icon">🐋</div><div><div class="op-name" style="color:var(--accent)">THE PRE-CLOSE WHALE</div><div class="op-tag">OPERATORE A · IL PIÙ AFFIDABILE</div></div></div>
-        <div class="op-stat-row"><span class="op-stat-label">⏰ Orario NY</span><span class="op-stat-val" style="color:var(--accent)">14:00 – 15:30</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">💰 Premium</span><span class="op-stat-val">$1M – $2.5M</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📞 Direzione</span><span class="op-stat-val">100% CALL</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📅 DTE</span><span class="op-stat-val">7 – 45 giorni</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📍 Strike</span><span class="op-stat-val">ITM / Near-ATM</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">🏷 Ticker</span><span class="op-stat-val" style="font-size:10px;color:var(--muted)">UAL CRWD FSLR META MSTR JPM V XLE...</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📊 N Trade</span><span class="op-stat-val">n = 17</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">✅ Win Rate</span><span class="op-badge" style="background:rgba(0,255,136,0.15);color:var(--accent);font-size:15px;padding:3px 14px">100%</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📈 Avg P&L</span><span class="op-stat-val" style="color:var(--accent);font-size:18px">+300%</span></div>
-        <div class="op-note" style="border-left-color:var(--accent)">Entra sempre nella stessa finestra pre-chiusura con premium costante su ticker diversi. Non ripete mai lo stesso ticker a breve distanza. Probabile desk istituzionale che esegue ordini direzionali prima della chiusura per evitare slippage overnight.</div>
+
+    <!-- AI NARRATIVE PANEL -->
+    <div class="panel" id="op_ai_panel" style="margin-bottom:20px;border-color:rgba(79,163,255,0.3);min-height:120px">
+      <div class="panel-title">
+        🤖 Analisi AI — Aggiornata sui Dati Live
+        <span class="panel-badge" id="op_ai_status">in elaborazione...</span>
       </div>
-      <div class="op-card" style="border-color:rgba(79,163,255,0.3)">
-        <div class="op-card-header"><div class="op-icon">🔔</div><div><div class="op-name" style="color:var(--accent3)">THE OPEN BELL LEAPS BUYER</div><div class="op-tag">OPERATORE B · IL PIÙ SISTEMATICO</div></div></div>
-        <div class="op-stat-row"><span class="op-stat-label">⏰ Orario NY</span><span class="op-stat-val" style="color:var(--accent3)">9:30 – 10:30</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">💰 Premium</span><span class="op-stat-val">$4M – $7M</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📞 Direzione</span><span class="op-stat-val">100% CALL</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📅 DTE</span><span class="op-stat-val">LEAPS 180–900 gg</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📍 Strike</span><span class="op-stat-val">Deep ITM (&lt;-15%)</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">🏷 Ticker</span><span class="op-stat-val" style="font-size:10px;color:var(--muted)">NVDA ARM TSLA MSFT META CRM AMD AMZN...</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📊 N Trade</span><span class="op-stat-val">n = 32</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">✅ Win Rate</span><span class="op-badge" style="background:rgba(16,185,129,0.15);color:var(--green);font-size:15px;padding:3px 14px">88%</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📈 Avg P&L</span><span class="op-stat-val" style="color:var(--green);font-size:18px">+130%</span></div>
-        <div class="op-note" style="border-left-color:var(--accent3)">Massiccia size, LEAPS lunghi, entrata a campana su mega-cap tech. Il 5 agosto 2024 ha deployato $25.9M su 5 ticker diversi in 4 ore con struttura identica — tutti vincenti. Comportamento da fondo quantitativo sistematico.</div>
-      </div>
-      <div class="op-card" style="border-color:rgba(245,158,11,0.3)">
-        <div class="op-card-header"><div class="op-icon">⚡</div><div><div class="op-name" style="color:var(--yellow)">THE MORNING SWING TRADER</div><div class="op-tag">OPERATORE C · IL PIÙ AGGRESSIVO</div></div></div>
-        <div class="op-stat-row"><span class="op-stat-label">⏰ Orario NY</span><span class="op-stat-val" style="color:var(--yellow)">10:30 – 12:00</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">💰 Premium</span><span class="op-stat-val">$1M – $1.5M</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📞 Direzione</span><span class="op-stat-val">93% CALL</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📅 DTE</span><span class="op-stat-val">Short 8–21 giorni</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📍 Strike</span><span class="op-stat-val">Variabile (high-beta)</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">🏷 Ticker</span><span class="op-stat-val" style="font-size:10px;color:var(--muted)">MSTR AMAT NVDA MARA CHAU SMCI PLTR...</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📊 N Trade</span><span class="op-stat-val">n = 16</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">✅ Win Rate</span><span class="op-badge" style="background:rgba(16,185,129,0.15);color:var(--green);font-size:15px;padding:3px 14px">93%</span></div>
-        <div class="op-stat-row"><span class="op-stat-label">📈 Avg P&L</span><span class="op-stat-val" style="color:var(--green);font-size:18px">+144%</span></div>
-        <div class="op-note" style="border-left-color:var(--yellow)">Preferisce swing brevi su ticker ad alta volatilità e crypto-adjacent. Meno sistematico degli altri due ma con strike selection precisa. Entra sempre nella prima metà sessione. Unico dei tre a usare Put occasionalmente (7%).</div>
+      <div id="op_ai_text" style="font-size:13px;color:var(--muted);line-height:1.9;margin-top:8px">
+        <div class="loading-pulse" style="display:flex;gap:8px;align-items:center">
+          <div style="width:8px;height:8px;border-radius:50%;background:var(--accent3);animation:loadPulse 1.2s infinite"></div>
+          <span>Claude sta leggendo i dati aggiornati dal Google Sheet...</span>
+        </div>
       </div>
     </div>
 
-    <div class="panel" style="margin-bottom:20px">
-      <div class="panel-title">🔍 Caso Studio — 5 Agosto 2024: La Firma dell'Operatore B in Azione</div>
-      <p style="font-size:12px;color:var(--muted);margin-bottom:18px">Stesso premium $4.7M–$5.3M &nbsp;·&nbsp; CALL LEAPS Deep ITM &nbsp;·&nbsp; Orario 10:03–14:09 NY &nbsp;·&nbsp; Score similarità 12–14/14 &nbsp;·&nbsp; Tutti vincenti</p>
-      <div class="case-trades">
-        <div class="case-trade-card"><div class="case-ticker">AMZN</div><div class="case-row">🕐 13:46 NY</div><div class="case-row">💰 $5.26M · LEAPS · Deep ITM</div><div class="case-pnl" style="color:var(--green)">+51%</div></div>
-        <div class="case-trade-card"><div class="case-ticker">AMD</div><div class="case-row">🕐 13:39 NY</div><div class="case-row">💰 $5.16M · LEAPS · Deep ITM</div><div class="case-pnl" style="color:var(--green)">+23%</div></div>
-        <div class="case-trade-card"><div class="case-ticker">CRM</div><div class="case-row">🕐 14:09 NY</div><div class="case-row">💰 $5.29M · LEAPS · Deep ITM</div><div class="case-pnl" style="color:var(--green)">+42%</div></div>
-        <div class="case-trade-card"><div class="case-ticker">SBUX</div><div class="case-row">🕐 14:03 NY</div><div class="case-row">💰 $5.30M · LEAPS · Deep ITM</div><div class="case-pnl" style="color:var(--green)">+270%</div></div>
-        <div class="case-trade-card"><div class="case-ticker">ARM</div><div class="case-row">🕐 10:28 NY</div><div class="case-row">💰 $4.88M · LEAPS · OTM 5-15%</div><div class="case-pnl" style="color:var(--green)">+60%</div></div>
-      </div>
-      <div class="case-total">TOTALE DEPLOYATO: ~$25.9M &nbsp;·&nbsp; 5/5 VINCENTI &nbsp;·&nbsp; UN SOLO OPERATORE &nbsp;·&nbsp; UN SOLO GIORNO</div>
+    <!-- OPERATOR PROFILES — live rendered -->
+    <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;letter-spacing:2px">
+      👤 PROFILI COMPORTAMENTALI — Calcolati in tempo reale dai dati live
+    </div>
+    <div class="op-grid" id="op_profiles_grid">
+      <div style="color:var(--muted);font-size:13px;padding:20px">Caricamento profili...</div>
     </div>
 
-    <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;letter-spacing:2px">🚦 REGOLE OPERATIVE</div>
-    <div class="rules-grid">
-      <div class="rule-card" style="border-left-color:var(--accent)"><div class="rule-num">REGOLA 01</div><div class="rule-title" style="color:var(--accent)">Pre-Close = Entra Sempre</div><div class="rule-body">CALL con premium $1M–$2.5M tra le 14:00 e le 15:30 NY su qualsiasi ticker. Nel nostro storico questo pattern non ha perso una volta sola.</div><div class="rule-stat" style="color:var(--accent)">100% WR &nbsp;·&nbsp; +300% avg &nbsp;·&nbsp; n=17</div></div>
-      <div class="rule-card" style="border-left-color:var(--accent3)"><div class="rule-num">REGOLA 02</div><div class="rule-title" style="color:var(--accent3)">Open Bell + LEAPS = Istituzionale</div><div class="rule-body">Premium $4M–$7M nei primi 60 minuti di mercato su LEAPS Deep ITM. Se compare su 2+ ticker nello stesso giorno, è quasi certamente la stessa mano. Il 2° trade è la conferma.</div><div class="rule-stat" style="color:var(--accent3)">88% WR &nbsp;·&nbsp; +130% avg &nbsp;·&nbsp; n=32</div></div>
-      <div class="rule-card" style="border-left-color:var(--yellow)"><div class="rule-num">REGOLA 03</div><div class="rule-title" style="color:var(--yellow)">Stesso Premium, Ticker Diversi = Stesso Op.</div><div class="rule-body">Vedi lo stesso range di premium su ticker diversi entro ±1 giorno? Alta probabilità stessa persona che accumula. Il terzo trade sullo stesso profilo è il segnale più forte in assoluto.</div><div class="rule-stat" style="color:var(--yellow)">3.600+ coppie cross-ticker identificate</div></div>
-      <div class="rule-card" style="border-left-color:var(--red)"><div class="rule-num">REGOLA 04 — EVITA</div><div class="rule-title" style="color:var(--red)">$600K–$1M su Scadenze Weekly</div><div class="rule-body">Sembra un flusso di qualità ma è la trappola più comune nel nostro storico. WR 25–46% indipendentemente dal ticker o dalla nota. Evitare anche se la nota dice "AA".</div><div class="rule-stat" style="color:var(--red)">25–46% WR &nbsp;·&nbsp; Skip sempre</div></div>
-    </div>
-
-    <div class="panel" style="margin-top:20px">
-      <div class="panel-title">⏰ Heatmap Win Rate — Orario NY × Premium <span class="panel-badge">CALL · n≥3 · multi-ticker</span></div>
-      <div style="overflow-x:auto"><table class="hm-table">
-        <thead><tr><th style="text-align:left;min-width:150px">Ora NY \ Premium</th><th>&lt;300K</th><th>300-600K</th><th>600K-1M</th><th>1M-1.5M</th><th>1.5M-2.5M</th><th>2.5M-4M</th><th>4M-7M</th><th>12M+</th></tr></thead>
-        <tbody>
-          <tr><td class="hm-label-col">Pre-Market &lt;9:30</td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td><td class="hm-cell-hot">100%<small><br>n=4</small></td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td><td class="hm-cell-na">—</td></tr>
-          <tr><td class="hm-label-col">Open 9:30–10:30</td><td class="hm-cell-bad">40%<small><br>n=5</small></td><td class="hm-cell-mid">67%<small><br>n=15</small></td><td class="hm-cell-bad">46%<small><br>n=13</small></td><td class="hm-cell-good">88%<small><br>n=24</small></td><td class="hm-cell-mid">77%<small><br>n=26</small></td><td class="hm-cell-mid">56%<small><br>n=9</small></td><td class="hm-cell-mid">76%<small><br>n=17</small></td><td class="hm-cell-good">88%<small><br>n=32</small></td></tr>
-          <tr><td class="hm-label-col">Morning 10:30–12</td><td class="hm-cell-good">80%<small><br>n=5</small></td><td class="hm-cell-mid">54%<small><br>n=11</small></td><td class="hm-cell-bad">43%<small><br>n=7</small></td><td class="hm-cell-hot">94%<small><br>n=16</small></td><td class="hm-cell-mid">79%<small><br>n=19</small></td><td class="hm-cell-mid">75%<small><br>n=8</small></td><td class="hm-cell-hot">100%<small><br>n=6</small></td><td class="hm-cell-hot">100%<small><br>n=4</small></td></tr>
-          <tr><td class="hm-label-col">Midday 12–14</td><td class="hm-cell-mid">57%<small><br>n=7</small></td><td class="hm-cell-bad">50%<small><br>n=4</small></td><td class="hm-cell-good">83%<small><br>n=6</small></td><td class="hm-cell-mid">77%<small><br>n=9</small></td><td class="hm-cell-good">83%<small><br>n=12</small></td><td class="hm-cell-hot">100%<small><br>n=6</small></td><td class="hm-cell-good">90%<small><br>n=10</small></td><td class="hm-cell-good">89%<small><br>n=9</small></td></tr>
-          <tr style="background:rgba(0,255,136,0.05)"><td class="hm-label-col" style="color:var(--accent)">⭐ Pre-Close 14–15:30</td><td class="hm-cell-na">—</td><td class="hm-cell-good">86%<small><br>n=7</small></td><td class="hm-cell-mid">56%<small><br>n=9</small></td><td class="hm-cell-hot" style="outline:2px solid var(--accent);border-radius:6px">100%<small><br>n=11</small></td><td class="hm-cell-hot" style="outline:2px solid var(--accent);border-radius:6px">100%<small><br>n=6</small></td><td class="hm-cell-mid">71%<small><br>n=7</small></td><td class="hm-cell-na">—</td><td class="hm-cell-hot">100%<small><br>n=4</small></td></tr>
-        </tbody>
+    <!-- LIVE HEATMAP — computed from live data -->
+    <div class="panel" style="margin-bottom:20px" id="op_heatmap_panel">
+      <div class="panel-title">⏰ Heatmap Win Rate Live — Orario NY × Premium <span class="panel-badge">CALL · n≥3 · ticker diversi · da dati Google Sheets</span></div>
+      <div style="overflow-x:auto"><table class="hm-table" id="op_heatmap_table">
+        <thead><tr id="op_heatmap_head"></tr></thead>
+        <tbody id="op_heatmap_body"></tbody>
       </table></div>
-      <div style="margin-top:10px;font-size:11px;color:var(--muted)"><span style="color:var(--accent);font-weight:700">Verde brillante</span> = WR ≥90% confermato. <span style="color:var(--red)">Rosso</span> = evitare sempre. Orari da Milano (CET/CEST) a New York (ET) −6h.</div>
+      <div style="margin-top:10px;font-size:11px;color:var(--muted)">
+        <span style="color:var(--accent);font-weight:700">Verde brillante</span> = WR ≥90%.
+        <span style="color:var(--yellow)">Giallo</span> = WR 65–89%.
+        <span style="color:var(--red)">Rosso</span> = WR &lt;65%.
+        Orari da Milano (CET/CEST) → New York (ET) −6h.
+      </div>
+    </div>
+
+    <!-- LIVE RULES — derived from computed profiles -->
+    <div style="font-family:'Space Mono',monospace;font-size:12px;color:var(--accent);margin-bottom:14px;letter-spacing:2px">
+      🚦 REGOLE OPERATIVE — Derivate automaticamente dai profili calcolati
+    </div>
+    <div class="rules-grid" id="op_rules_grid">
+      <div style="color:var(--muted);font-size:13px;padding:20px">Caricamento regole...</div>
     </div>
 
     <div style="text-align:center;margin-top:28px;font-size:11px;color:var(--muted);font-family:'Space Mono',monospace;">
-      GAMMA CAPITAL · OPERATOR INTELLIGENCE · DATI AGGIORNATI IN TEMPO REALE
+      GAMMA CAPITAL · OPERATOR INTELLIGENCE · <span id="op_update_ts">AGGIORNAMENTO IN CORSO</span>
     </div>
   </div><!-- /page-operatori -->
 
@@ -780,8 +744,11 @@ function parseArrayResponse(rows) {
   // OPEN P=10,BOUGHT=11,HIGH P=12,SOLD=13,NOTE=14,P&L=15,P&L %=16,
   // DAYS=17,EXP=18,DTE=19
   const COL = {
+    OPEN:   findH(['OPEN'])   >= 0 ? findH(['OPEN'])   : 0,
     g:      findH(['g'])      >= 0 ? findH(['g'])      : 1,
     TICKER: findH(['TICKER']) >= 0 ? findH(['TICKER']) : 4,
+    PREZZO: findH(['PREZZO']) >= 0 ? findH(['PREZZO']) : 5,
+    STK:    findH(['STK'])    >= 0 ? findH(['STK'])    : 6,
     CP:     findH(['C/P'])    >= 0 ? findH(['C/P'])    : 7,
     BOUGHT: findH(['BOUGHT']) >= 0 ? findH(['BOUGHT']) : 11,
     NOTE:   findH(['NOTE'])   >= 0 ? findH(['NOTE'])   : 14,
@@ -789,6 +756,31 @@ function parseArrayResponse(rows) {
     DTE:    findH(['DTE'])    >= 0 ? findH(['DTE'])    : 19,
   };
   console.log('Colonne mappate:', COL);
+
+  // Parse Apps Script Date → hour in Milan time → subtract 6h for NY
+  const parseMilanDate = v => {
+    if (v == null || v === '') return null;
+    // Apps Script serializes Date as "Date(2024,7,5,13,46,0)" (0-indexed month)
+    const m = String(v).match(/Date\((\d+),(\d+),(\d+),(\d+),(\d+)/);
+    if (m) {
+      const [,yr,mo,dy,hr,mn] = m.map(Number);
+      return { h: hr, min: mn }; // Milan time
+    }
+    // Fallback: string like "05/08/2024 13:46" or "05/08/24 01.46 PM"
+    const s = String(v);
+    const m2 = s.match(/(\d{1,2})[.:](\d{2})\s*(AM|PM)?/i);
+    if (m2) {
+      let h = parseInt(m2[1]);
+      const mn = parseInt(m2[2]);
+      if (m2[3]) { // 12h format
+        if (m2[3].toUpperCase()==='PM' && h<12) h+=12;
+        if (m2[3].toUpperCase()==='AM' && h===12) h=0;
+      }
+      return { h, min: mn };
+    }
+    return null;
+  };
+  const milanToNY = t => t ? ((t.h + t.min/60) - 6 + 24) % 24 : NaN;
 
   // Smart value parser: handles Apps Script returning numbers directly
   // - Percentage cells come as decimals: 0.47 = 47%, 3.37 = 337%, -1 = -100%
@@ -831,23 +823,36 @@ function parseArrayResponse(rows) {
     const ticker = str(COL.TICKER);
     if (!ticker || ticker === '#N/A' || ticker.toLowerCase() === 'ticker' || ticker === '') continue;
 
-    const pnlPct = parsePercent(raw(COL.PNL_P));
-    const bought = parseMoney(raw(COL.BOUGHT));
-    const dte    = parseNum(raw(COL.DTE));
-    const note   = str(COL.NOTE);
-    const cp     = str(COL.CP).toUpperCase();
-    const day    = str(COL.g).toLowerCase();
+    const pnlPct  = parsePercent(raw(COL.PNL_P));
+    const bought  = parseMoney(raw(COL.BOUGHT));
+    const dte     = parseNum(raw(COL.DTE));
+    const note    = str(COL.NOTE);
+    const cp      = str(COL.CP).toUpperCase();
+    const day     = str(COL.g).toLowerCase();
+    const prezzo  = parseMoney(raw(COL.PREZZO));
+    const stk     = parseMoney(raw(COL.STK));
+    const hour_ny = milanToNY(parseMilanDate(raw(COL.OPEN)));
 
-    // Debug first few rows
-    if (i <= 4) console.log(`Row ${i}:`, { ticker, pnlPct, bought, dte, note, cp, day });
+    // OTM %
+    let otm = NaN;
+    if (!isNaN(prezzo) && !isNaN(stk) && prezzo > 0) {
+      otm = cp === 'C'
+        ? (stk - prezzo) / prezzo * 100
+        : (prezzo - stk) / prezzo * 100;
+    }
 
-    trades.push({ ticker, note, cp, day, pnlPct, bought, dte });
+    if (i <= 3) console.log(`Row ${i}:`, { ticker, pnlPct, bought, dte, note, cp, day, hour_ny, otm });
+
+    trades.push({ ticker, note, cp, day, pnlPct, bought, dte, hour_ny, otm });
   }
 
   console.log(`Parsed ${trades.length} trades`);
   G.trades = trades;
   computeStats();
   renderAll();
+  computeOperators();
+  renderOperators();
+  generateAINarrative();
   hideLoader();
   showApp();
   document.getElementById('lastUpdate').textContent =
@@ -907,6 +912,9 @@ function parseCsvResponse(csvText) {
   G.trades = trades;
   computeStats();
   renderAll();
+  computeOperators();
+  renderOperators();
+  generateAINarrative();
   hideLoader();
   showApp();
   document.getElementById('lastUpdate').textContent =
@@ -1412,12 +1420,344 @@ function showError(msg) {
   showApp();
 }
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// OPERATOR ENGINE — Runs on live data every refresh
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function premBucketOp(b) {
+  if (isNaN(b) || b <= 0) return null;
+  if (b < 300000)    return '<300K';
+  if (b < 600000)    return '300K-600K';
+  if (b < 1000000)   return '600K-1M';
+  if (b < 1500000)   return '1M-1.5M';
+  if (b < 2500000)   return '1.5M-2.5M';
+  if (b < 4000000)   return '2.5M-4M';
+  if (b < 7000000)   return '4M-7M';
+  if (b < 12000000)  return '7M-12M';
+  return '12M+';
+}
+
+function hourBucketOp(h) {
+  if (isNaN(h) || h == null) return null;
+  if (h < 9.5)   return 'Pre-Market';
+  if (h < 10.5)  return 'Open (9:30-10:30)';
+  if (h < 12)    return 'Morning (10:30-12)';
+  if (h < 14)    return 'Midday (12-14)';
+  if (h < 15.5)  return 'Pre-Close (14-15:30)';
+  if (h < 16)    return 'Power Hour';
+  if (h < 17)    return 'Close';
+  return 'After Hours';
+}
+
+function dteBucketOp(d) {
+  if (isNaN(d) || d == null) return null;
+  if (d <= 7)    return 'Weekly 0-7gg';
+  if (d <= 21)   return 'Short 8-21gg';
+  if (d <= 45)   return 'Medium 22-45gg';
+  if (d <= 90)   return 'Quarterly 46-90gg';
+  if (d <= 180)  return 'Long 91-180gg';
+  return 'LEAPS 180+gg';
+}
+
+function computeOperators() {
+  const closed = G.trades.filter(t => !isNaN(t.pnlPct) && t.pnlPct !== 0);
+
+  // ── Profile clustering: group by (premBucket × hourBucket × CP) ────────────
+  const profileMap = {};
+  closed.forEach(t => {
+    const pb = premBucketOp(t.bought);
+    const hb = hourBucketOp(t.hour_ny);
+    if (!pb || !hb || !t.cp) return;
+    const key = `${pb}||${hb}||${t.cp}`;
+    if (!profileMap[key]) profileMap[key] = { pb, hb, cp: t.cp, trades: [] };
+    profileMap[key].trades.push(t);
+  });
+
+  // Filter: n≥3, at least 2 distinct tickers (real cross-ticker fingerprint)
+  const profiles = Object.values(profileMap)
+    .filter(p => {
+      const tickers = new Set(p.trades.map(t => t.ticker));
+      return p.trades.length >= 3 && tickers.size >= 2;
+    })
+    .map(p => {
+      const pnls   = p.trades.map(t => t.pnlPct);
+      const tickers = [...new Set(p.trades.map(t => t.ticker))];
+      const wr     = pnls.filter(x => x > 0).length / pnls.length * 100;
+      const avg    = pnls.reduce((a,b)=>a+b,0) / pnls.length;
+      const med    = median(pnls);
+      // Most common DTE bucket
+      const dteCnt = {};
+      p.trades.forEach(t => { const d = dteBucketOp(t.dte); if(d) dteCnt[d]=(dteCnt[d]||0)+1; });
+      const topDte = Object.entries(dteCnt).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
+      return { pb: p.pb, hb: p.hb, cp: p.cp, n: p.trades.length,
+               tickers: tickers.slice(0,7), wr, avg, med, topDte };
+    })
+    // Score = WR% × avg (reward both high WR and high P&L)
+    .sort((a,b) => (b.wr * Math.max(b.avg,0)) - (a.wr * Math.max(a.avg,0)));
+
+  // ── Live heatmap: (hourBucket × premBucket) WR matrix ─────────────────────
+  const HM_HOURS = ['Pre-Market','Open (9:30-10:30)','Morning (10:30-12)','Midday (12-14)','Pre-Close (14-15:30)'];
+  const HM_PREMS = ['<300K','300K-600K','600K-1M','1M-1.5M','1.5M-2.5M','2.5M-4M','4M-7M','12M+'];
+  const hmData = {};
+  HM_HOURS.forEach(h => {
+    hmData[h] = {};
+    HM_PREMS.forEach(p => { hmData[h][p] = []; });
+  });
+  closed.filter(t => t.cp === 'C').forEach(t => {
+    const hb = hourBucketOp(t.hour_ny);
+    const pb = premBucketOp(t.bought);
+    if (hb && pb && hmData[hb] && hmData[hb][pb] !== undefined) {
+      // Only count if different ticker (anti-ticker-concentration)
+      hmData[hb][pb].push({ pnl: t.pnlPct, ticker: t.ticker });
+    }
+  });
+
+  G.operators = {
+    profiles: profiles.slice(0, 8),
+    topProfilesForAI: profiles.slice(0, 5),
+    hmHours: HM_HOURS,
+    hmPrems: HM_PREMS,
+    hmData,
+    totalClosed: closed.length,
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RENDER OPERATOR PAGE
+// ═══════════════════════════════════════════════════════════════════════════════
+function renderOperators() {
+  if (!G.operators) return;
+  const { profiles, hmHours, hmPrems, hmData, totalClosed } = G.operators;
+
+  // ── KPIs ───────────────────────────────────────────────────────────────────
+  document.getElementById('op_k_total').textContent = totalClosed;
+  document.getElementById('op_k_profiles').textContent = profiles.length;
+  const topP = profiles[0];
+  if (topP) {
+    document.getElementById('op_k_bestwr').textContent = topP.wr.toFixed(0) + '%';
+    document.getElementById('op_k_bestwr_sub').textContent = topP.pb + ' · ' + topP.hb;
+    document.getElementById('op_k_bestavg').textContent = '+' + topP.avg.toFixed(0) + '%';
+  }
+  document.getElementById('op_update_ts').textContent =
+    'AGGIORNATO ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+
+  // ── Profile cards ──────────────────────────────────────────────────────────
+  const CARD_COLORS = [
+    'rgba(0,255,136,0.3)', 'rgba(79,163,255,0.3)', 'rgba(245,158,11,0.3)',
+    'rgba(139,92,246,0.3)','rgba(255,107,53,0.3)',  'rgba(16,185,129,0.3)',
+  ];
+  const BADGE_COLORS = [
+    {bg:'rgba(0,255,136,0.15)',fg:'var(--accent)'},
+    {bg:'rgba(79,163,255,0.15)',fg:'var(--accent3)'},
+    {bg:'rgba(245,158,11,0.15)',fg:'var(--yellow)'},
+    {bg:'rgba(139,92,246,0.15)',fg:'#a78bfa'},
+    {bg:'rgba(255,107,53,0.15)',fg:'var(--accent2)'},
+    {bg:'rgba(16,185,129,0.15)',fg:'var(--green)'},
+  ];
+  const wrBadgeColor = wr => wr >= 90 ? BADGE_COLORS[0] : wr >= 75 ? BADGE_COLORS[1] : BADGE_COLORS[4];
+
+  const grid = document.getElementById('op_profiles_grid');
+  grid.innerHTML = profiles.map((p, i) => {
+    const c = CARD_COLORS[i % CARD_COLORS.length];
+    const bc = wrBadgeColor(p.wr);
+    const wrVal = p.wr.toFixed(0) + '%';
+    const avgVal = (p.avg >= 0 ? '+' : '') + p.avg.toFixed(0) + '%';
+    const opLabel = ['A','B','C','D','E','F','G','H'][i];
+    return `
+    <div class="op-card" style="border-color:${c}">
+      <div class="op-card-header">
+        <div style="font-size:24px;min-width:32px">${i===0?'★':i===1?'◆':i===2?'▲':'·'}</div>
+        <div>
+          <div class="op-name" style="color:${bc.fg}">OPERATORE ${opLabel}</div>
+          <div class="op-tag">${p.hb} · ${p.pb}</div>
+        </div>
+      </div>
+      <div class="op-stat-row">
+        <span class="op-stat-label">Orario NY</span>
+        <span class="op-stat-val" style="color:${bc.fg}">${p.hb}</span>
+      </div>
+      <div class="op-stat-row">
+        <span class="op-stat-label">Premium</span>
+        <span class="op-stat-val">${p.pb}</span>
+      </div>
+      <div class="op-stat-row">
+        <span class="op-stat-label">Direzione</span>
+        <span class="op-stat-val">${p.cp === 'C' ? '▲ CALL' : '▼ PUT'}</span>
+      </div>
+      <div class="op-stat-row">
+        <span class="op-stat-label">DTE tipico</span>
+        <span class="op-stat-val">${p.topDte}</span>
+      </div>
+      <div class="op-stat-row">
+        <span class="op-stat-label">N Trade</span>
+        <span class="op-stat-val">n = ${p.n}</span>
+      </div>
+      <div class="op-stat-row">
+        <span class="op-stat-label">Ticker</span>
+        <span class="op-stat-val" style="font-size:10px;color:var(--muted)">${p.tickers.join(' · ')}</span>
+      </div>
+      <div class="op-stat-row">
+        <span class="op-stat-label">Win Rate</span>
+        <span class="op-badge" style="background:${bc.bg};color:${bc.fg};font-size:16px;padding:3px 16px">${wrVal}</span>
+      </div>
+      <div class="op-stat-row">
+        <span class="op-stat-label">Avg P&L</span>
+        <span class="op-stat-val" style="color:${bc.fg};font-size:18px">${avgVal}</span>
+      </div>
+      <div class="op-note" style="border-left-color:${bc.fg}">
+        Profilo con <strong>${p.n}</strong> trade chiusi su <strong>${p.tickers.length}</strong> ticker diversi.
+        Mediana P&L: ${p.med >= 0 ? '+' : ''}${p.med.toFixed(0)}%.
+        Finestra operativa: <strong>${p.hb}</strong> con premium tipico <strong>${p.pb}</strong>.
+      </div>
+    </div>`;
+  }).join('');
+
+  // ── Live heatmap ────────────────────────────────────────────────────────────
+  const thead = document.getElementById('op_heatmap_head');
+  const tbody = document.getElementById('op_heatmap_body');
+
+  thead.innerHTML = '<th style="text-align:left;min-width:150px;font-size:10px">Ora NY \ Premium</th>' +
+    hmPrems.map(p => `<th style="font-size:10px">${p}</th>`).join('');
+
+  tbody.innerHTML = hmHours.map(h => {
+    const isPreClose = h === 'Pre-Close (14-15:30)';
+    const rowStyle = isPreClose ? 'background:rgba(0,255,136,0.04)' : '';
+    const cells = hmPrems.map(p => {
+      const entries = hmData[h]?.[p] || [];
+      // Require at least 2 distinct tickers
+      const tickers = new Set(entries.map(e => e.ticker));
+      if (entries.length < 3 || tickers.size < 2) return '<td class="hm-cell-na">—</td>';
+      const wr = entries.filter(e => e.pnl > 0).length / entries.length * 100;
+      const cls = wr >= 90 ? 'hm-cell-hot' : wr >= 75 ? 'hm-cell-good' : wr >= 60 ? 'hm-cell-mid' : 'hm-cell-bad';
+      const highlight = isPreClose && wr >= 90 ? 'style="outline:2px solid var(--accent);border-radius:6px"' : '';
+      return `<td class="${cls}" ${highlight}>${wr.toFixed(0)}%<small><br>n=${entries.length}</small></td>`;
+    }).join('');
+    return `<tr style="${rowStyle}">
+      <td class="hm-label-col" ${isPreClose ? 'style="color:var(--accent)"' : ''}>
+        ${isPreClose ? '⭐ ' : ''}${h}
+      </td>${cells}</tr>`;
+  }).join('');
+
+  // ── Rules — derived from top 4 profiles ───────────────────────────────────
+  const rulesEl = document.getElementById('op_rules_grid');
+  const top4    = profiles.slice(0, 4);
+  // Also find worst profiles for the "evita" rule
+  const worst   = [...profiles].sort((a,b) => a.wr - b.wr).find(p => p.wr < 60 && p.n >= 4);
+  const rulesHTML = top4.map((p, i) => {
+    const labels = ['01','02','03','04'];
+    const verdict = i === 0 ? 'ENTRA SEMPRE' : i === 1 ? 'SEGUI' : 'CONFERMA';
+    const colors  = ['var(--accent)', 'var(--accent3)', 'var(--yellow)', 'var(--green)'];
+    const body = `Premium <strong>${p.pb}</strong> in fascia <strong>${p.hb}</strong> → ${p.cp === 'C' ? 'CALL' : 'PUT'}.
+      Su <strong>${p.tickers.slice(0,4).join(', ')}</strong> e altri ${p.tickers.length > 4 ? p.tickers.length-4 : 0} ticker.`;
+    return `
+    <div class="rule-card" style="border-left-color:${colors[i]}">
+      <div class="rule-num">REGOLA ${labels[i]}</div>
+      <div class="rule-title" style="color:${colors[i]}">${verdict} — ${p.pb} · ${p.hb}</div>
+      <div class="rule-body">${body}</div>
+      <div class="rule-stat" style="color:${colors[i]}">
+        ${p.wr.toFixed(0)}% WR &nbsp;·&nbsp; Avg ${p.avg >= 0 ? '+' : ''}${p.avg.toFixed(0)}% &nbsp;·&nbsp; n=${p.n}
+      </div>
+    </div>`;
+  }).join('');
+
+  const avoidHTML = worst ? `
+    <div class="rule-card" style="border-left-color:var(--red)">
+      <div class="rule-num">DA EVITARE</div>
+      <div class="rule-title" style="color:var(--red)">${worst.pb} · ${worst.hb}</div>
+      <div class="rule-body">WR inferiore al 60% su ${worst.n} trade. Ticker: ${worst.tickers.slice(0,4).join(', ')}. Evitare anche con nota AA.</div>
+      <div class="rule-stat" style="color:var(--red)">${worst.wr.toFixed(0)}% WR &nbsp;·&nbsp; n=${worst.n} &nbsp;·&nbsp; Skip sempre</div>
+    </div>` : '';
+
+  rulesEl.innerHTML = rulesHTML + avoidHTML;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AI NARRATIVE — Claude legge i profili calcolati e scrive l'analisi
+// ═══════════════════════════════════════════════════════════════════════════════
+async function generateAINarrative() {
+  if (!G.operators || !G.operators.topProfilesForAI) return;
+
+  const el = document.getElementById('op_ai_text');
+  const badge = document.getElementById('op_ai_status');
+  if (!el || !badge) return;
+
+  // Build summary of computed profiles for Claude
+  const profiles = G.operators.topProfilesForAI;
+  const total = G.operators.totalClosed;
+
+  const profileSummary = profiles.map((p, i) => ({
+    operatore: ['A','B','C','D','E'][i],
+    orario_ny: p.hb,
+    premium: p.pb,
+    direzione: p.cp === 'C' ? 'CALL' : 'PUT',
+    dte_tipico: p.topDte,
+    n_trade: p.n,
+    ticker_principali: p.tickers,
+    win_rate: p.wr.toFixed(1) + '%',
+    avg_pnl: (p.avg >= 0 ? '+' : '') + p.avg.toFixed(0) + '%',
+    median_pnl: (p.med >= 0 ? '+' : '') + p.med.toFixed(0) + '%',
+  }));
+
+  const prompt = `Sei un analista di opzioni esperto. Hai davanti i profili comportamentali di possibili operatori istituzionali identificati attraverso clustering cross-ticker su ${total} trade reali di BlackBox Stocks.
+
+DATI AGGIORNATI DAL GOOGLE SHEETS (${new Date().toLocaleDateString('it-IT')}):
+${JSON.stringify(profileSummary, null, 2)}
+
+Metodologia: ogni profilo raggruppa trade su TICKER DIVERSI con lo stesso range di premium, la stessa finestra oraria (NY time, −6h da Milano), la stessa direzione. Questo suggerisce che è la stessa mano che opera in modo ripetibile.
+
+Scrivi un'analisi concisa in italiano (4-5 paragrafi) che:
+1. Identifica il profilo più affidabile e perché è significativo statisticamente
+2. Spiega le implicazioni operative per chi vuole seguire questi flussi
+3. Evidenzia eventuali pattern o anomalie interessanti nei dati
+4. Menziona quale profilo evitare e perché
+5. Aggiungi una considerazione su come questi pattern potrebbero evolvere
+
+Tono: professionale ma diretto. Usa numeri specifici dai dati. Non inventare nulla — analizza solo quello che hai.`;
+
+  el.innerHTML = `<div class="loading-pulse" style="display:flex;gap:8px;align-items:center">
+    <div style="width:8px;height:8px;border-radius:50%;background:var(--accent3);animation:loadPulse 1.2s infinite"></div>
+    <span>Claude sta analizzando ${total} trade aggiornati...</span>
+  </div>`;
+  badge.textContent = 'analisi in corso...';
+
+  try {
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await res.json();
+    const text = data.content?.map(b => b.text || '').join('') || '';
+
+    if (!text) throw new Error('Risposta vuota');
+
+    // Format the text into styled paragraphs
+    const paras = text.trim().split(/
+
++/);
+    el.innerHTML = paras.map(p => `<p style="margin-bottom:14px;color:var(--text)">${p.trim()}</p>`).join('');
+    badge.textContent = 'aggiornata · ' + new Date().toLocaleTimeString('it-IT',{hour:'2-digit',minute:'2-digit'});
+    badge.style.color = 'var(--accent)';
+  } catch(e) {
+    el.innerHTML = `<p style="color:var(--muted);font-style:italic">
+      Analisi AI non disponibile (${e.message}). I profili calcolati mostrano dati live accurati.
+    </p>`;
+    badge.textContent = 'offline';
+    console.error('AI narrative error:', e);
+  }
+}
+
 // ── PAGE NAVIGATION ──────────────────────────────────────────────────────────
-function showPage(name) {
+function showPage(name, btn) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.page-btn').forEach(b => b.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
-  event.currentTarget.classList.add('active');
+  if (btn) btn.classList.add('active');
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
