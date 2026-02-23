@@ -611,7 +611,7 @@
 
     <!-- LIVE HEATMAP — computed from live data -->
     <div class="panel" style="margin-bottom:20px" id="op_heatmap_panel">
-      <div class="panel-title">⏰ Heatmap Win Rate Live — Orario NY × Premium <span class="panel-badge">CALL · n≥3 · ticker diversi · da dati Google Sheets</span></div>
+      <div class="panel-title">⏰ Heatmap Win Rate Live <span class="panel-badge" id="op_hm_badge">CALL · n≥3 · live</span></div>
       <div style="overflow-x:auto"><table class="hm-table" id="op_heatmap_table">
         <thead><tr id="op_heatmap_head"></tr></thead>
         <tbody id="op_heatmap_body"></tbody>
@@ -620,7 +620,7 @@
         <span style="color:var(--accent);font-weight:700">Verde brillante</span> = WR ≥90%.
         <span style="color:var(--yellow)">Giallo</span> = WR 65–89%.
         <span style="color:var(--red)">Rosso</span> = WR &lt;65%.
-        Orari da Milano (CET/CEST) → New York (ET) −6h.
+        ⭐ = fascia migliore. Orari in ET (New York). Dati live da Google Sheets.
       </div>
     </div>
 
@@ -777,100 +777,50 @@ function parseArrayResponse(rows) {
   };
   console.log('Colonne mappate:', COL);
 
-  // Parse OPEN column → NY market hour (float, e.g. 15.77 = 15:46)
-  // Apps Script returns dates as UTC ISO strings in JSON, e.g. "2024-08-05T19:46:00.000Z"
-  // Milan CEST (UTC+2) 21:46 → UTC 19:46 → ET (EDT UTC-4) 15:46 ✓
-  // Fallback: if string format like "05/08/2024 22.46" or "22.46", extract time carefully.
-  // ── Robust time parser: tries every known Apps Script date format ────────────
-  // Returns ET hour as float (e.g. 15.77 = 15:46 ET). Stores diagnostics in G._parseLog.
-  G._parseLog = []; // reset each compute
-
-  const tryParseToMilan = v => {
-    // Returns Milan hour (float) or NaN. All roads lead to Milan → then -6h → ET.
+  // ── Parse OPEN column → ET hour ──────────────────────────────────────────────
+  // Apps Script serializes Milan datetimes WITHOUT tz conversion.
+  // ISO "2025-09-19T20:06:00.000Z" means Milano 20:06, NOT UTC 20:06.
+  // So: read UTC hours directly as Milan hours → subtract 6h → ET.
+  // Filter: only keep 9:00–16:30 ET (valid US options market hours).
+  G._parseLog = [];
+  const parseToNYHour = v => {
     if (v == null || v === '') return NaN;
     const s = String(v).trim();
+    let milanH = NaN;
 
-    // ① ISO UTC string: "2024-08-05T19:46:00.000Z" (Apps Script JSON.stringify of Date)
-    if (s.includes('T') && s.includes(':')) {
-      try {
-        const d = new Date(s);
-        if (!isNaN(d.getTime())) {
-          const mon = d.getUTCMonth() + 1;
-          const mOff = (mon >= 3 && mon <= 10) ? 2 : 1; // CEST=+2, CET=+1
-          return ((d.getUTCHours() + mOff) % 24) + d.getUTCMinutes() / 60;
-        }
-      } catch(e) {}
-    }
-
-    // ② Non-ISO datetime: "2025-02-05 21:46:00" (year-first without T)
-    const mYMD = s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})[T\s](\d{1,2}):(\d{2})/);
-    if (mYMD) {
-      const mon = parseInt(mYMD[2]);
-      const h = parseInt(mYMD[4]), mn = parseInt(mYMD[5]);
-      // This could be local (Milan) already — Apps Script sometimes formats in local TZ
-      return h + mn / 60;
-    }
-
-    // ③ Excel serial number (float from Apps Script when date cell read as number)
-    //    e.g. 45308.90625 where integer = date, fraction = time
-    const num = typeof v === 'number' ? v : parseFloat(s);
-    if (!isNaN(num) && num > 40000 && num < 60000) {
-      const frac = num - Math.floor(num);
-      const totalMin = Math.round(frac * 1440); // 24*60
-      return Math.floor(totalMin / 60) + (totalMin % 60) / 60;
-    }
-
-    // ④ Pure fraction-of-day (e.g. 0.906944 = 21:46)
-    if (!isNaN(num) && num > 0 && num < 1) {
-      const totalMin = Math.round(num * 1440);
-      return Math.floor(totalMin / 60) + (totalMin % 60) / 60;
-    }
-
-    // ⑤ Italian date-time string: "05/08/2024 21:46" or "05.08.2024 21.46"
-    //    or "05/08/24 21.46" — strip the date part first
-    let ts = s.replace(/^\d{1,2}[.\/\-]\d{1,2}[.\/\-]\d{2,4}\s*/, '');
-    // Also try DD/MM without year: "05/08 21:46"
-    if (ts === s) ts = s.replace(/^\d{1,2}[.\/]\d{1,2}\s+/, '');
-
-    // ⑥ Now extract time: HH:MM, HH.MM, HH:MM:SS
-    const mT = ts.match(/^(\d{1,2})[.:\s](\d{2})(?:[:.]\d{2})?\s*(AM|PM)?/i);
-    if (mT) {
-      let h = parseInt(mT[1]), mn = parseInt(mT[2]);
-      if (h <= 23 && mn <= 59) {
-        if (mT[3]) {
-          if (mT[3].toUpperCase() === 'PM' && h < 12) h += 12;
-          if (mT[3].toUpperCase() === 'AM' && h === 12) h = 0;
-        }
-        return h + mn / 60;
+    // ① ISO string (from Apps Script JSON): use UTC hours AS Milan hours
+    if (s.includes('T') && s.endsWith('Z')) {
+      const tIdx = s.indexOf('T');
+      const parts = s.slice(tIdx + 1, tIdx + 6).split(':');
+      if (parts.length === 2) {
+        const h = parseInt(parts[0]), m = parseInt(parts[1]);
+        if (h >= 0 && h <= 23 && m >= 0 && m <= 59) milanH = h + m / 60;
       }
     }
 
-    // ⑦ Pure time with no date prefix: "21:46" "21.46"
-    const mPure = s.match(/^(\d{1,2})[.:](\d{2})$/);
-    if (mPure) {
-      const h = parseInt(mPure[1]), mn = parseInt(mPure[2]);
-      if (h <= 23 && mn <= 59) return h + mn / 60;
+    // ② Fallback: Italian datetime string "05/08/2024 21.46" or "21:46"
+    if (isNaN(milanH)) {
+      let ts = s.replace(/^\d{1,2}[.\/-]\d{1,2}[.\/-]\d{2,4}\s*/, '');
+      const m = ts.match(/^(\d{1,2})[.:](\d{2})/);
+      if (m) {
+        const h = parseInt(m[1]), mn = parseInt(m[2]);
+        if (h <= 23 && mn <= 59) milanH = h + mn / 60;
+      }
     }
 
-    return NaN;
-  };
-
-  const parseToNYHour = v => {
-    const milanH = tryParseToMilan(v);
-    // Milan → NY: -6h (both CET→EST and CEST→EDT give exactly -6h)
+    // Milan → ET: -6h (CEST UTC+2 → EDT UTC-4 = -6; CET UTC+1 → EST UTC-5 = -6)
     const nyH = isNaN(milanH) ? NaN : ((milanH - 6) + 24) % 24;
-    // Log first 8 for debug panel
+
+    // Filter: keep only valid US options market hours (9:00–16:30 ET)
+    const valid = !isNaN(nyH) && nyH >= 9.0 && nyH <= 16.5;
+
     if (G._parseLog.length < 8) {
-      G._parseLog.push({
-        raw: v == null ? '(null)' : String(v).slice(0, 60),
-        type: typeof v,
-        milanH: isNaN(milanH) ? 'NaN' : milanH.toFixed(2),
-        nyH: isNaN(nyH) ? 'NaN' : nyH.toFixed(2),
-        valid: !isNaN(nyH) && nyH >= 9.25 && nyH <= 16.25
-      });
+      G._parseLog.push({ raw: s.slice(0, 50), milanH: isNaN(milanH) ? 'NaN' : milanH.toFixed(2), nyH: isNaN(nyH) ? 'NaN' : nyH.toFixed(2), valid });
     }
-    return nyH;
+
+    return valid ? nyH : NaN; // return NaN for out-of-hours → excluded from clustering
   };
+
 
     const parsePercent = v => {
     if (v == null || v === '') return NaN;
@@ -1558,117 +1508,118 @@ function dteBucketOp(d) {
 function computeOperators() {
   const closed = G.trades.filter(t => !isNaN(t.pnlPct) && t.pnlPct !== 0);
 
-  // ── Diagnose hour data availability ────────────────────────────────────────
-  const tradesWithHour = closed.filter(t => !isNaN(t.hour_ny) && t.hour_ny > 0);
-  const hourCoverage = tradesWithHour.length / Math.max(closed.length, 1);
-  console.log(`Hour coverage: ${tradesWithHour.length}/${closed.length} = ${(hourCoverage*100).toFixed(0)}%`);
-  if (tradesWithHour.length < 5) {
-    console.warn('Low hour coverage — OPEN column may not be a date/time field. Falling back to premium×CP clustering.');
-  }
+  const tradesWithHour = closed.filter(t => !isNaN(t.hour_ny));
+  const hourCoverage   = tradesWithHour.length / Math.max(closed.length, 1);
+  console.log(`Valid ET hours: ${tradesWithHour.length}/${closed.length} (${(hourCoverage*100).toFixed(0)}%)`);
 
-  // ── Profile clustering: (premBucket × hourBucket × CP) ────────────────────
-  // If hour data not available, fall back to (premBucket × CP) only
-  const useHour = hourCoverage > 0.2; // need at least 20% coverage to trust hours
+  // ── Clustering: premium × hourBucket × CP (falls back to premium × DTE × CP) ─
+  const useHour = hourCoverage >= 0.20;
+
+  const hourBucket = h => {
+    if (isNaN(h)) return null;
+    if (h < 9.5)   return 'Open (9:30-10:30)';
+    if (h < 10.5)  return 'Open (9:30-10:30)';
+    if (h < 12)    return 'Morning (10:30-12)';
+    if (h < 14)    return 'Midday (12-14)';
+    if (h < 15.5)  return 'Pre-Close (14-15:30)';
+    return 'Close (15:30-16:30)';
+  };
+
+  const dteBucket = d => {
+    if (isNaN(d) || d == null) return null;
+    if (d <= 7)   return 'Weekly (0-7gg)';
+    if (d <= 21)  return 'Short (8-21gg)';
+    if (d <= 45)  return 'Medium (22-45gg)';
+    if (d <= 90)  return 'Quarterly (46-90gg)';
+    if (d <= 180) return 'Long (91-180gg)';
+    return 'LEAPS (180+gg)';
+  };
+
   const profileMap = {};
   closed.forEach(t => {
     const pb = premBucketOp(t.bought);
     if (!pb || !t.cp) return;
-    const hb = useHour ? hourBucketOp(t.hour_ny) : 'N/D';
-    const key = useHour
-      ? (hb ? `${pb}||${hb}||${t.cp}` : null)
-      : `${pb}||${t.cp}`;
-    if (!key) return;
-    if (!profileMap[key]) profileMap[key] = { pb, hb: hb || 'N/D', cp: t.cp, trades: [] };
+    let dim2, dim2Label;
+    if (useHour) {
+      dim2 = hourBucket(t.hour_ny);
+      dim2Label = dim2;
+    } else {
+      dim2 = dteBucket(t.dte);
+      dim2Label = dim2;
+    }
+    if (!dim2) return;
+    const key = `${pb}||${dim2}||${t.cp}`;
+    if (!profileMap[key]) profileMap[key] = { pb, dim2, cp: t.cp, trades: [] };
     profileMap[key].trades.push(t);
   });
 
-  // Filter: n≥3, at least 2 distinct tickers (real cross-ticker fingerprint)
   const profiles = Object.values(profileMap)
     .filter(p => {
       const tickers = new Set(p.trades.map(t => t.ticker));
       return p.trades.length >= 3 && tickers.size >= 2;
     })
     .map(p => {
-      const pnls   = p.trades.map(t => t.pnlPct);
+      const pnls    = p.trades.map(t => t.pnlPct);
       const tickers = [...new Set(p.trades.map(t => t.ticker))];
-      const wr     = pnls.filter(x => x > 0).length / pnls.length * 100;
-      const avg    = pnls.reduce((a,b)=>a+b,0) / pnls.length;
-      const med    = median(pnls);
-      // Most common DTE bucket
+      const wr  = pnls.filter(x => x > 0).length / pnls.length * 100;
+      const avg = pnls.reduce((a,b)=>a+b,0) / pnls.length;
+      const med = median(pnls);
       const dteCnt = {};
-      p.trades.forEach(t => { const d = dteBucketOp(t.dte); if(d) dteCnt[d]=(dteCnt[d]||0)+1; });
+      p.trades.forEach(t => { const d = dteBucket(t.dte); if(d) dteCnt[d]=(dteCnt[d]||0)+1; });
       const topDte = Object.entries(dteCnt).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
-      return { pb: p.pb, hb: p.hb, cp: p.cp, n: p.trades.length,
-               tickers: tickers.slice(0,7), wr, avg, med, topDte };
+      return {
+        pb: p.pb, hb: p.dim2, cp: p.cp, dtb: topDte,
+        n: p.trades.length, tickers: tickers.slice(0,8),
+        wr, avg, med
+      };
     })
-    // Score = WR% × avg (reward both high WR and high P&L)
     .sort((a,b) => (b.wr * Math.max(b.avg,0)) - (a.wr * Math.max(a.avg,0)));
 
-  // ── Live heatmap: (hourBucket × premBucket) WR matrix ─────────────────────
-  const HM_HOURS = ['Pre-Market','Open (9:30-10:30)','Morning (10:30-12)','Midday (12-14)','Pre-Close (14-15:30)','Close (15:30-16:00)'];
+  // ── Heatmap: hourBucket × premium if hours available, else DTE × premium ──
   const HM_PREMS = ['<300K','300K-600K','600K-1M','1M-1.5M','1.5M-2.5M','2.5M-4M','4M-7M','12M+'];
+  const HM_ROWS  = useHour
+    ? ['Open (9:30-10:30)','Morning (10:30-12)','Midday (12-14)','Pre-Close (14-15:30)','Close (15:30-16:30)']
+    : ['Weekly (0-7gg)','Short (8-21gg)','Medium (22-45gg)','Quarterly (46-90gg)','Long (91-180gg)','LEAPS (180+gg)'];
+
   const hmData = {};
-  HM_HOURS.forEach(h => {
-    hmData[h] = {};
-    HM_PREMS.forEach(p => { hmData[h][p] = []; });
+  HM_ROWS.forEach(r => {
+    hmData[r] = {};
+    HM_PREMS.forEach(p => { hmData[r][p] = []; });
   });
+
   closed.filter(t => t.cp === 'C').forEach(t => {
-    const hb = hourBucketOp(t.hour_ny);
-    const pb = premBucketOp(t.bought);
-    if (hb && pb && hmData[hb] && hmData[hb][pb] !== undefined) {
-      // Only count if different ticker (anti-ticker-concentration)
-      hmData[hb][pb].push({ pnl: t.pnlPct, ticker: t.ticker });
+    const pb  = premBucketOp(t.bought);
+    const row = useHour ? hourBucket(t.hour_ny) : dteBucket(t.dte);
+    if (pb && row && hmData[row] && hmData[row][pb] !== undefined) {
+      hmData[row][pb].push({ pnl: t.pnlPct, ticker: t.ticker });
     }
   });
 
   G.operators = {
     profiles: profiles.slice(0, 8),
     topProfilesForAI: profiles.slice(0, 5),
-    hmHours: HM_HOURS,
-    hmPrems: HM_PREMS,
-    hmData,
+    hmHours: HM_ROWS, hmPrems: HM_PREMS, hmData,
     totalClosed: closed.length,
-    useHour,
-    hourCoverage: Math.round(hourCoverage * 100),
+    useHour, hourCoverage: Math.round(hourCoverage * 100),
+    hmMode: useHour ? 'hour_x_premium' : 'dte_x_premium',
   };
 }
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // RENDER OPERATOR PAGE
 // ═══════════════════════════════════════════════════════════════════════════════
 function renderOperators() {
   if (!G.operators) return;
-  const { profiles, hmHours, hmPrems, hmData, totalClosed, useHour, hourCoverage } = G.operators;
+  const { profiles, hmHours, hmPrems, hmData, totalClosed, useHour, hourCoverage, hmMode } = G.operators;
+  // Update heatmap title dynamically
+  const hmBadge = document.getElementById('op_hm_badge');
+  if (hmBadge) hmBadge.textContent = (useHour ? 'Orario NY × Premium' : 'DTE × Premium') + ' · CALL · n≥3 · live';
+  const hmPanel = document.getElementById('op_heatmap_panel');
+  const hmTitle = hmPanel ? hmPanel.querySelector('.panel-title') : null;
+  if (hmTitle) hmTitle.firstChild.textContent = (useHour ? '⏰ Heatmap — Orario NY × Premium ' : '📊 Heatmap — DTE × Premium ');
 
   // ── KPIs ───────────────────────────────────────────────────────────────────
-  // ── Populate debug panel ────────────────────────────────────────────────────
-  const debugPanel = document.getElementById('op_debug_panel');
-  const debugTable = document.getElementById('op_debug_table');
-  const debugSum   = document.getElementById('op_debug_summary');
-  if (G._parseLog && G._parseLog.length > 0 && debugTable) {
-    debugPanel.style.display = 'block';
-    const rows = G._parseLog.map(r => {
-      const rawDisp = String(r.raw).replace(/</g,'&lt;').slice(0, 55);
-      const nyDisp  = r.nyH === 'NaN' ? '<span style="color:var(--red)">NaN ❌</span>' : 
-                      r.valid ? `<span style="color:var(--accent)">${r.nyH} ET ✓</span>` :
-                      `<span style="color:var(--yellow)">${r.nyH} ET ⚠</span>`;
-      return `<tr>
-        <td style="padding:4px 8px;color:var(--muted)">${r.type}</td>
-        <td style="padding:4px 8px;color:var(--text);max-width:300px;word-break:break-all">${rawDisp}</td>
-        <td style="padding:4px 8px;color:var(--yellow)">${r.milanH === 'NaN' ? '❌' : r.milanH + 'h Milan'}</td>
-        <td style="padding:4px 8px">${nyDisp}</td>
-      </tr>`;
-    }).join('');
-    debugTable.innerHTML = `<table style="width:100%;border-collapse:collapse">
-      <thead><tr>
-        <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:10px">tipo</th>
-        <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:10px">valore raw dalla colonna OPEN</th>
-        <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:10px">Milan</th>
-        <th style="text-align:left;padding:4px 8px;color:var(--muted);font-size:10px">NY ET</th>
-      </tr></thead><tbody>${rows}</tbody></table>`;
-    const valid = G._parseLog.filter(r => r.valid).length;
-    if (debugSum) debugSum.textContent = `${valid}/${G._parseLog.length} orari validi (fascia 9:15-16:15 ET). ${valid === 0 ? 'Parser non riconosce il formato — condividi screenshot.' : valid < G._parseLog.length ? 'Parsing parziale.' : 'Parsing OK.'}`;
-  }
 
   document.getElementById('op_k_total').textContent = totalClosed;
   document.getElementById('op_k_profiles').textContent = profiles.length;
@@ -1713,20 +1664,20 @@ function renderOperators() {
         </div>
       </div>
       <div class="op-stat-row">
-        <span class="op-stat-label">Orario NY</span>
+        <span class="op-stat-label">⏰ Orario NY</span>
         <span class="op-stat-val" style="color:${bc.fg}">${p.hb}</span>
       </div>
       <div class="op-stat-row">
-        <span class="op-stat-label">Premium</span>
+        <span class="op-stat-label">💰 Premium</span>
         <span class="op-stat-val">${p.pb}</span>
       </div>
       <div class="op-stat-row">
-        <span class="op-stat-label">Direzione</span>
+        <span class="op-stat-label">📞 Direzione</span>
         <span class="op-stat-val">${p.cp === 'C' ? '▲ CALL' : '▼ PUT'}</span>
       </div>
       <div class="op-stat-row">
-        <span class="op-stat-label">DTE tipico</span>
-        <span class="op-stat-val">${p.topDte}</span>
+        <span class="op-stat-label">📅 DTE tipico</span>
+        <span class="op-stat-val">${p.dtb}</span>
       </div>
       <div class="op-stat-row">
         <span class="op-stat-label">N Trade</span>
@@ -1747,30 +1698,21 @@ function renderOperators() {
       <div class="op-note" style="border-left-color:${bc.fg}">
         Profilo con <strong>${p.n}</strong> trade chiusi su <strong>${p.tickers.length}</strong> ticker diversi.
         Mediana P&L: ${p.med >= 0 ? '+' : ''}${p.med.toFixed(0)}%.
-        ${p.hb !== 'N/D' ? `Finestra operativa: <strong>${p.hb}</strong> con premium <strong>${p.pb}</strong>.` : `Premium tipico <strong>${p.pb}</strong>. Orario non disponibile — aggiungere orario in formato HH:MM nella colonna OPEN.`}
+        ${p.hb !== 'N/D' ? `Fascia oraria: <strong>${p.hb}</strong>.` : ''} DTE tipico <strong>${p.dtb}</strong> · premium <strong>${p.pb}</strong> su <strong>${p.tickers.length}</strong> ticker diversi.
       </div>
     </div>`;
   }).join('');
 
   // ── Live heatmap ────────────────────────────────────────────────────────────
-  const hmPanel = document.getElementById('op_heatmap_panel');
-  if (!useHour && hmPanel) {
-    const note = document.createElement('div');
-    note.style.cssText = 'padding:16px;font-size:13px;color:var(--yellow);background:rgba(245,158,11,0.08);border-radius:8px;margin-bottom:12px;border-left:3px solid var(--yellow)';
-    note.innerHTML = '⚠️ <strong>Orari non disponibili</strong> — La colonna OPEN del tuo Google Sheet non contiene dati orari leggibili (copertura: ' + hourCoverage + '%). La heatmap richiede orari. I profili sopra sono calcolati su premium × direzione × ticker (senza orario).';
-    const tableWrap = hmPanel.querySelector('[style*="overflow"]');
-    if (tableWrap) hmPanel.insertBefore(note, tableWrap);
-  }
-
   const thead = document.getElementById('op_heatmap_head');
   const tbody = document.getElementById('op_heatmap_body');
 
-  thead.innerHTML = '<th style="text-align:left;min-width:150px;font-size:10px">Ora NY \ Premium</th>' +
+  thead.innerHTML = '<th style="text-align:left;min-width:150px;font-size:10px">DTE \ Premium</th>' +
     hmPrems.map(p => `<th style="font-size:10px">${p}</th>`).join('');
 
   tbody.innerHTML = hmHours.map(h => {
-    const isPreClose = h === 'Pre-Close (14-15:30)';
-    const rowStyle = isPreClose ? 'background:rgba(0,255,136,0.04)' : '';
+    const isHighlight = h === 'Pre-Close (14-15:30)' || h === 'LEAPS (180+gg)';
+    const rowStyle = isHighlight ? 'background:rgba(0,255,136,0.04)' : '';
     const cells = hmPrems.map(p => {
       const entries = hmData[h]?.[p] || [];
       // Require at least 2 distinct tickers
@@ -1778,12 +1720,12 @@ function renderOperators() {
       if (entries.length < 3 || tickers.size < 2) return '<td class="hm-cell-na">—</td>';
       const wr = entries.filter(e => e.pnl > 0).length / entries.length * 100;
       const cls = wr >= 90 ? 'hm-cell-hot' : wr >= 75 ? 'hm-cell-good' : wr >= 60 ? 'hm-cell-mid' : 'hm-cell-bad';
-      const highlight = isPreClose && wr >= 90 ? 'style="outline:2px solid var(--accent);border-radius:6px"' : '';
+      const highlight = wr >= 90 ? 'style="outline:2px solid var(--accent);border-radius:6px"' : '';
       return `<td class="${cls}" ${highlight}>${wr.toFixed(0)}%<small><br>n=${entries.length}</small></td>`;
     }).join('');
     return `<tr style="${rowStyle}">
-      <td class="hm-label-col" ${isPreClose ? 'style="color:var(--accent)"' : ''}>
-        ${isPreClose ? '⭐ ' : ''}${h}
+      <td class="hm-label-col" ${isHighlight ? 'style="color:var(--accent)"' : ''}>
+        ${isHighlight ? '⭐ ' : ''}${h}
       </td>${cells}</tr>`;
   }).join('');
 
