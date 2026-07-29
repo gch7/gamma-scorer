@@ -1,0 +1,921 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © Gamma Capital
+//@version=6
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  MEDIE MOBILI + BANDE DI BOLLINGER + VWAP  [Gamma Capital]
+//  ---------------------------------------------------------------------------------------
+//  Indicatore "tutto in uno" per l'analisi di trend, volatilità e prezzo medio ponderato.
+//
+//  BUDGET DEI PLOT (limite Pine: 64 per script). Conteggio dichiarato:
+//    - 6 plot medie mobili (colori "input" = 1 conteggio l'uno) ...........  6
+//    - 2 plot nascosti + 1 fill per il Ribbon (colore "series") ...........  4
+//    - Bollinger: 5 plot, di cui 2 con colore "series" = 2 conteggi l'uno .  7
+//    - Bollinger: 2 fill + 1 bgcolor + 2 plotshape ........................  5
+//    - VWAP: 1 plot linea + 6 plot bande + 1 plot MVWAP + 5 fill ..........  13
+//    - 2 plotshape per Golden/Death Cross .................................  2
+//    - alertcondition() x 7 (ognuna vale 1 conteggio) .....................  7
+//    TOTALE MASSIMO 44 conteggi su 64 disponibili. Margine ampio.
+//    NB: alert() NON consuma conteggi; hline(), label.*, table.* nemmeno.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+// NIENTE max_bars_back: tutti i riferimenti storici dello script usano un indice COSTANTE
+// ([0] oppure [1] scelti da un ternario, mai `serie[variabile]`), quindi il dimensionamento
+// automatico dei buffer non può fallire. La reference di indicator() è esplicita:
+// «The required buffer size is automatically detected by the Pine Script runtime. Using this
+// parameter is only necessary when a runtime error occurs because automatic detection fails».
+// Fissarlo (per esempio a 500) allocherebbe inutilmente 500 valori storici per OGNI variabile
+// e funzione dello script, mentre qui ne servono al massimo 2.
+indicator(title            = "Medie Mobili + Bollinger + VWAP [Gamma Capital]",
+         shorttitle        = "MA+BB+VWAP",
+         overlay           = true,
+         max_labels_count  = 100)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  0. COSTANTI DI GRUPPO E TOOLTIP CONDIVISI
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+string G_MA    = "Medie Mobili"
+string G_BB    = "Bande di Bollinger"
+string G_VWAP  = "VWAP"
+string G_TAB   = "Tabella"
+string G_ALERT = "Alert"
+
+// In una riga `inline` TradingView mostra UNA SOLA icona di tooltip, quella del primo widget:
+// la spiegazione deve quindi coprire tutti i campi della riga, altrimenti gli altri restano muti.
+string TT_RIGA = "Ordine dei campi della riga:\n" +
+     "1) attiva/disattiva  2) tipo di media  3) periodo  4) colore  5) spessore  6) timeframe (MTF).\n\n" +
+     "TIPI: SMA/EMA/WMA/HMA/RMA(SMMA)/VWMA/LSMA/ALMA sono built-in Pine; DEMA e TEMA NON esistono " +
+     "come built-in e sono implementate a mano come 2*EMA1-EMA2 e 3*EMA1-3*EMA2+EMA3.\n\n" +
+     "TIMEFRAME: lascia VUOTO per usare il timeframe del grafico. Se lo valorizzi deve essere " +
+     "SUPERIORE a quello del grafico: con un timeframe inferiore lo script si ferma con un " +
+     "messaggio esplicito, perché i dati intrabar restituiti sarebbero privi di senso.\n\n" +
+     "PERIODO: con HMA e LSMA il periodo minimo utile è 2 (con 1 la formula degenera); lo script " +
+     "lo forza internamente a 2 solo per questi due tipi."
+
+string TT_ALMA = "Parametri validi solo per il tipo ALMA. In Pine ta.alma() richiede " +
+     "obbligatoriamente offset e sigma: non hanno valori di default nel linguaggio.\n" +
+     "offset vicino a 1 = più reattiva, vicino a 0 = più liscia. sigma alto = più liscia."
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  1. INPUT — SEZIONE A: MEDIE MOBILI
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+// Elenco dei tipi disponibili. Poiché arriva da input.string(), il valore è qualificato
+// "input string" (quindi compatibile con "simple string"): NON può cambiare da barra a barra.
+// È esattamente questa invarianza che rende lecito lo switch dentro f_ma(): il ramo scelto è
+// sempre lo stesso su ogni barra, quindi i buffer storici interni delle funzioni ta.* restano
+// contigui. Con un selettore "series" i buffer si bucherebbero e i valori sarebbero errati.
+
+float srcMA = input.source(close, "Sorgente comune", group = G_MA,
+     tooltip = "Sorgente usata da tutte e 6 le medie mobili.\n\n" +
+     "ATTENZIONE: qui si può selezionare anche l'output di un altro indicatore presente sul " +
+     "grafico, ma in quel caso NON vanno usati i campi timeframe (MTF). È un limite documentato " +
+     "di request.*(): una serie esterna non può essere rivalutata nel contesto richiesto, quindi " +
+     "verrebbe letta con i dati del TIMEFRAME DEL GRAFICO e la media MTF risulterebbe " +
+     "silenziosamente sbagliata. Con le sorgenti built-in (chiusura, hl2, hlc3, ...) il problema " +
+     "non si pone.")
+
+// ── Slot 1 ─ EMA 9  (timing di brevissimo periodo, scalping/intraday) ──────────────────────
+bool   att1  = input.bool(true, "MA 1", group = G_MA, inline = "ma1", tooltip = TT_RIGA)
+string tip1  = input.string("EMA", "", options = ["SMA","EMA","WMA","HMA","RMA/SMMA","VWMA","DEMA","TEMA","LSMA","ALMA"], group = G_MA, inline = "ma1", active = att1)
+int    len1  = input.int(9, "", minval = 1, maxval = 5000, group = G_MA, inline = "ma1", active = att1)
+color  col1  = input.color(#FF6D00, "", group = G_MA, inline = "ma1", active = att1)
+int    wid1  = input.int(2, "", minval = 1, maxval = 5, group = G_MA, inline = "ma1", active = att1)
+string tf1   = input.timeframe("", "", group = G_MA, inline = "ma1", active = att1)
+
+// ── Slot 2 ─ EMA 21 (supporto dinamico classico nei trend, pullback intraday/swing) ────────
+bool   att2  = input.bool(true, "MA 2", group = G_MA, inline = "ma2", tooltip = TT_RIGA)
+string tip2  = input.string("EMA", "", options = ["SMA","EMA","WMA","HMA","RMA/SMMA","VWMA","DEMA","TEMA","LSMA","ALMA"], group = G_MA, inline = "ma2", active = att2)
+int    len2  = input.int(21, "", minval = 1, maxval = 5000, group = G_MA, inline = "ma2", active = att2)
+color  col2  = input.color(#2962FF, "", group = G_MA, inline = "ma2", active = att2)
+int    wid2  = input.int(2, "", minval = 1, maxval = 5, group = G_MA, inline = "ma2", active = att2)
+string tf2   = input.timeframe("", "", group = G_MA, inline = "ma2", active = att2)
+
+// ── Slot 3 ─ SMA 50 (trend intermedio, gamba veloce del Golden/Death Cross) ────────────────
+bool   att3  = input.bool(true, "MA 3", group = G_MA, inline = "ma3", tooltip = TT_RIGA)
+string tip3  = input.string("SMA", "", options = ["SMA","EMA","WMA","HMA","RMA/SMMA","VWMA","DEMA","TEMA","LSMA","ALMA"], group = G_MA, inline = "ma3", active = att3)
+int    len3  = input.int(50, "", minval = 1, maxval = 5000, group = G_MA, inline = "ma3", active = att3)
+color  col3  = input.color(#26A69A, "", group = G_MA, inline = "ma3", active = att3)
+int    wid3  = input.int(2, "", minval = 1, maxval = 5, group = G_MA, inline = "ma3", active = att3)
+string tf3   = input.timeframe("", "", group = G_MA, inline = "ma3", active = att3)
+
+// ── Slot 4 ─ SMA 100 ──────────────────────────────────────────────────────────────────────
+bool   att4  = input.bool(true, "MA 4", group = G_MA, inline = "ma4", tooltip = TT_RIGA)
+string tip4  = input.string("SMA", "", options = ["SMA","EMA","WMA","HMA","RMA/SMMA","VWMA","DEMA","TEMA","LSMA","ALMA"], group = G_MA, inline = "ma4", active = att4)
+int    len4  = input.int(100, "", minval = 1, maxval = 5000, group = G_MA, inline = "ma4", active = att4)
+color  col4  = input.color(#AB47BC, "", group = G_MA, inline = "ma4", active = att4)
+int    wid4  = input.int(2, "", minval = 1, maxval = 5, group = G_MA, inline = "ma4", active = att4)
+string tf4   = input.timeframe("", "", group = G_MA, inline = "ma4", active = att4)
+
+// ── Slot 5 ─ SMA 200 (spartiacque di regime: sopra = bias long, sotto = bias difensivo) ────
+bool   att5  = input.bool(true, "MA 5", group = G_MA, inline = "ma5", tooltip = TT_RIGA)
+string tip5  = input.string("SMA", "", options = ["SMA","EMA","WMA","HMA","RMA/SMMA","VWMA","DEMA","TEMA","LSMA","ALMA"], group = G_MA, inline = "ma5", active = att5)
+int    len5  = input.int(200, "", minval = 1, maxval = 5000, group = G_MA, inline = "ma5", active = att5)
+color  col5  = input.color(#EF5350, "", group = G_MA, inline = "ma5", active = att5)
+int    wid5  = input.int(3, "", minval = 1, maxval = 5, group = G_MA, inline = "ma5", active = att5)
+string tf5   = input.timeframe("", "", group = G_MA, inline = "ma5", active = att5)
+
+// ── Slot 6 ─ slot libero, disattivato di default (EMA 20) ─────────────────────────────────
+bool   att6  = input.bool(false, "MA 6", group = G_MA, inline = "ma6", tooltip = TT_RIGA)
+string tip6  = input.string("EMA", "", options = ["SMA","EMA","WMA","HMA","RMA/SMMA","VWMA","DEMA","TEMA","LSMA","ALMA"], group = G_MA, inline = "ma6", active = att6)
+int    len6  = input.int(20, "", minval = 1, maxval = 5000, group = G_MA, inline = "ma6", active = att6)
+color  col6  = input.color(#787B86, "", group = G_MA, inline = "ma6", active = att6)
+int    wid6  = input.int(1, "", minval = 1, maxval = 5, group = G_MA, inline = "ma6", active = att6)
+string tf6   = input.timeframe("", "", group = G_MA, inline = "ma6", active = att6)
+
+// ── Parametri ALMA (condivisi da tutti gli slot che scelgono il tipo ALMA) ────────────────
+// sigma ha un massimo: con sigma molto grande i pesi gaussiani sottotraboccano a zero, il
+// fattore di normalizzazione diventa 0 e ta.alma() restituisce na (la media sparirebbe
+// dal grafico senza alcuna spiegazione).
+float almaOff = input.float(0.85, "ALMA offset", minval = 0.0, maxval = 1.0, step = 0.01, group = G_MA, inline = "alma", tooltip = TT_ALMA)
+float almaSig = input.float(6.0,  "sigma",       minval = 0.1, maxval = 50.0, step = 0.1, group = G_MA, inline = "alma")
+
+// ── Ribbon ───────────────────────────────────────────────────────────────────────────────
+bool  ribOn   = input.bool(true, "Ribbon fra due medie", group = G_MA,
+     tooltip = "Riempie l'area fra due slot a scelta. Verde quando lo slot A è sopra lo slot B, " +
+     "rosso nel caso opposto.\nI due slot devono essere DIVERSI ed entrambi attivi: altrimenti " +
+     "il riempimento sarebbe agganciato a una linea non disegnata e non sarebbe verificabile.")
+int   ribA    = input.int(3, "Slot A", minval = 1, maxval = 6, group = G_MA, inline = "rib", active = ribOn)
+int   ribB    = input.int(5, "Slot B", minval = 1, maxval = 6, group = G_MA, inline = "rib", active = ribOn)
+color colRibU = input.color(color.new(#26A69A, 82), "Su", group = G_MA, inline = "ribc", active = ribOn)
+color colRibD = input.color(color.new(#EF5350, 82), "Giù", group = G_MA, inline = "ribc", active = ribOn)
+
+// ── Etichette ────────────────────────────────────────────────────────────────────────────
+bool etichetteOn = input.bool(true, "Etichette a fine grafico", group = G_MA,
+     tooltip = "Mostra il nome di ogni media attiva (es. \"EMA 21\") all'estremità destra del grafico.")
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  2. INPUT — SEZIONE B: BANDE DI BOLLINGER
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+bool   bbOn    = input.bool(true, "Attiva Bande di Bollinger", group = G_BB)
+float  bbSrc   = input.source(close, "Sorgente", group = G_BB,
+     tooltip = "Serie su cui vengono calcolate basis e deviazione standard. È anche la serie " +
+     "usata per %B e per i segnali di uscita dalla banda: di fabbrica è la chiusura.")
+string bbTipo  = input.string("SMA", "Tipo di basis", options = ["SMA","EMA","WMA","HMA","RMA/SMMA","VWMA","DEMA","TEMA","LSMA","ALMA"], group = G_BB,
+     tooltip = "La definizione ortodossa di Bollinger usa la SMA. Puoi comunque scegliere un " +
+     "basis diverso: il basis è il CENTRO delle bande, mentre la semi-ampiezza resta sempre la " +
+     "deviazione standard di popolazione (ta.stdev), cioè la dispersione attorno alla MEDIA " +
+     "della finestra.\nÈ l'unica misura che rappresenta la VOLATILITÀ: calcolare la dispersione " +
+     "attorno a un basis con ritardo diverso gonfierebbe le bande in proporzione al ritardo del " +
+     "basis, non alla volatilità, falsando %B, BandWidth e Squeeze.")
+int    bbLen   = input.int(20, "Periodo", minval = 2, maxval = 5000, group = G_BB)
+float  bbMult1 = input.float(2.0, "Moltiplicatore #1", minval = 0.1, step = 0.1, group = G_BB)
+bool   bb2On   = input.bool(false, "Seconda coppia di bande", group = G_BB, inline = "bb2")
+float  bbMult2 = input.float(1.0, "Molt. #2", minval = 0.1, step = 0.1, group = G_BB, inline = "bb2", active = bb2On)
+int    bbOff   = input.int(0, "Offset", minval = -500, maxval = 500, group = G_BB,
+     tooltip = "Sposta graficamente le bande di N barre. In Pine il parametro offset di plot() " +
+     "richiede un qualificatore 'simple': quindi non può dipendere dal prezzo.")
+
+color  colBBUp   = input.color(#2962FF, "Bande", group = G_BB, inline = "bbc")
+color  colBBBas  = input.color(#FF6D00, "Basis", group = G_BB, inline = "bbc")
+bool   bbFillOn  = input.bool(true, "Riempi l'area", group = G_BB, inline = "bbf")
+int    bbFillTr  = input.int(92, "Trasp.", minval = 0, maxval = 100, group = G_BB, inline = "bbf", active = bbFillOn)
+bool   bbFillDin = input.bool(true, "Colore area dinamico su %B", group = G_BB,
+     tooltip = "Rosso quando %B > 1 (sorgente sopra la banda alta), verde quando %B < 0, neutro altrimenti.")
+
+bool   sqzOn    = input.bool(true, "Rileva lo Squeeze", group = G_BB, inline = "sqz",
+     tooltip = "Squeeze = BandWidth al minimo delle ultime N barre (definizione originale di " +
+     "John Bollinger, che usava ~125 barre daily, cioè 6 mesi).\n" +
+     "Il rilevamento parte solo dopo aver osservato N barre con BandWidth valido: prima di " +
+     "allora il 'minimo' sarebbe calcolato su una finestra incompleta.\n" +
+     "Attenzione al 'head fake': il primo movimento dopo lo squeeze è spesso falso.")
+int    sqzLen   = input.int(120, "barre", minval = 5, maxval = 2000, group = G_BB, inline = "sqz", active = sqzOn)
+color  colSqz   = input.color(color.new(#FFD54F, 80), "Colore Squeeze", group = G_BB, active = sqzOn)
+
+bool   bbSegnOn = input.bool(true, "Segnali di chiusura fuori banda", group = G_BB,
+     tooltip = "Marca SOLO la prima barra di ogni sequenza fuori banda. Una chiusura fuori banda " +
+     "NON è di per sé un segnale di inversione: finché il prezzo 'cammina sulla banda' è " +
+     "un segnale di continuazione.\n" +
+     "I segnali (come il %B) sono valutati sulla SORGENTE delle bande, che di fabbrica è la " +
+     "chiusura: è l'unico confronto coerente con le bande stesse.")
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  3. INPUT — SEZIONE C: VWAP
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+bool   vwOn      = input.bool(true, "Attiva VWAP", group = G_VWAP)
+float  vwSrc     = input.source(hlc3, "Sorgente", group = G_VWAP)
+string vwAncora  = input.string("Sessione", "Ancoraggio",
+     options = ["Sessione","Settimana","Mese","Trimestre","Anno","Data personalizzata"], group = G_VWAP,
+     tooltip = "Condizione che azzera l'accumulo della VWAP.\n" +
+     "\"Sessione\" corrisponde a timeframe.change(\"D\"), esattamente come fa la VWAP nativa " +
+     "di TradingView. Con le extended hours attive l'ancoraggio cade nel pre-market.")
+int    vwData    = input.time(timestamp("2024-01-02T00:00:00+00:00"), "Data di ancoraggio", group = G_VWAP, confirm = false,
+     tooltip = "Usata solo con ancoraggio \"Data personalizzata\". Se la data è successiva " +
+     "all'ultima barra caricata la VWAP non parte mai: in quel caso compare un'etichetta di " +
+     "avviso sul grafico.\n" +
+     "Nota tecnica: input.time() pretende un 'const int', quindi il default può essere " +
+     "prodotto solo dall'overload timestamp(\"stringa-data\"), qui in forma ISO 8601 completa " +
+     "(\"YYYY-MM-DDThh:mm:ss±hh:mm\"). L'orario è interpretato in GMT+0, non nel fuso dell'exchange.")
+bool   vwNoDWM   = input.bool(true, "Nascondi su timeframe 1D e superiori", group = G_VWAP,
+     tooltip = "Su un grafico daily o superiore l'ancoraggio giornaliero è vero su OGNI barra: " +
+     "la VWAP si azzererebbe ogni barra e coinciderebbe con la sorgente. Meglio nasconderla.")
+color  colVW     = input.color(#2962FF, "Colore VWAP", group = G_VWAP)
+
+string vwModo    = input.string("Deviazione standard", "Modalità bande", options = ["Deviazione standard","Percentuale"], group = G_VWAP,
+     tooltip = "Determina l'unità di misura della distanza delle bande. " +
+     "In modalità \"Percentuale\" un moltiplicatore pari a 1 significa 1% della VWAP.")
+bool   vwB1On    = input.bool(true,  "Banda 1", group = G_VWAP, inline = "vb1")
+float  vwB1Mult  = input.float(1.0, "×", minval = 0.0, step = 0.5, group = G_VWAP, inline = "vb1", active = vwB1On)
+color  colVWB1   = input.color(#26A69A, "", group = G_VWAP, inline = "vb1", active = vwB1On)
+bool   vwB2On    = input.bool(false, "Banda 2", group = G_VWAP, inline = "vb2")
+float  vwB2Mult  = input.float(2.0, "×", minval = 0.0, step = 0.5, group = G_VWAP, inline = "vb2", active = vwB2On)
+color  colVWB2   = input.color(#808000, "", group = G_VWAP, inline = "vb2", active = vwB2On)
+bool   vwB3On    = input.bool(false, "Banda 3", group = G_VWAP, inline = "vb3")
+float  vwB3Mult  = input.float(3.0, "×", minval = 0.0, step = 0.5, group = G_VWAP, inline = "vb3", active = vwB3On)
+color  colVWB3   = input.color(#009688, "", group = G_VWAP, inline = "vb3", active = vwB3On)
+bool   vwFillOn  = input.bool(true, "Riempi fra le bande", group = G_VWAP, inline = "vwf",
+     tooltip = "Riempie le fasce comprese fra bande ADIACENTI (VWAP↔1, 1↔2, 2↔3), non aree " +
+     "sovrapposte una dentro l'altra: così si legge a colpo d'occhio in quale deviazione si " +
+     "trova il prezzo.\nLa fascia 1↔2 richiede quindi anche la Banda 1 attiva, e la fascia 2↔3 " +
+     "anche la Banda 2: sono i bordi del riempimento.")
+int    vwFillTr  = input.int(94, "Trasp.", minval = 0, maxval = 100, group = G_VWAP, inline = "vwf", active = vwFillOn)
+
+bool   mvwOn     = input.bool(false, "MVWAP (media mobile della VWAP)", group = G_VWAP, inline = "mvw",
+     tooltip = "MVWAP = media mobile SEMPLICE applicata alla serie VWAP. Non si azzera agli " +
+     "ancoraggi, quindi è più liscia. Da non confondere con la Rolling VWAP, che è invece " +
+     "una VWAP ricalcolata su una finestra scorrevole di N barre.")
+int    mvwLen    = input.int(20, "barre", minval = 1, maxval = 2000, group = G_VWAP, inline = "mvw", active = mvwOn)
+color  colMVW    = input.color(#FF9800, "", group = G_VWAP, inline = "mvw", active = mvwOn)
+
+bool   vwAvviso  = input.bool(true, "Avvisa se il simbolo non ha volume", group = G_VWAP,
+     tooltip = "Avviso NON bloccante: mostra un'etichetta e lascia funzionare il resto dello " +
+     "script. Nessun runtime.error(), che invece fermerebbe l'indicatore.")
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  4. INPUT — SEZIONE D: TABELLA / SEZIONE E: ALERT
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+bool   tabOn   = input.bool(true, "Mostra tabella info", group = G_TAB)
+string tabPos  = input.string("In alto a destra", "Posizione",
+     options = ["In alto a sinistra","In alto al centro","In alto a destra",
+     "Al centro a sinistra","Al centro","Al centro a destra",
+     "In basso a sinistra","In basso al centro","In basso a destra"],
+     group = G_TAB, active = tabOn)
+color  tabBg   = input.color(color.new(#131722, 20), "Sfondo", group = G_TAB, inline = "tabc", active = tabOn)
+color  tabTxt  = input.color(#D1D4DC, "Testo", group = G_TAB, inline = "tabc", active = tabOn)
+string tabDim  = input.string("Piccolo", "Dimensione testo", options = ["Minuscolo","Piccolo","Normale","Grande"], group = G_TAB, active = tabOn)
+
+int  xFast = input.int(3, "Slot media veloce (incrocio)", minval = 1, maxval = 6, group = G_ALERT, inline = "x",
+     tooltip = "Golden Cross = la media veloce incrocia AL RIALZO la media lenta.\n" +
+     "Death Cross = incrocio al ribasso. Con i default (slot 3 = SMA 50 e slot 5 = SMA 200) " +
+     "si ottiene il Golden/Death Cross classico.\n" +
+     "I due slot devono essere DIVERSI ed entrambi attivi: un incrocio fra medie non disegnate " +
+     "non sarebbe verificabile sul grafico, quindi in quel caso i segnali restano spenti.")
+int  xSlow = input.int(5, "lenta", minval = 1, maxval = 6, group = G_ALERT, inline = "x")
+bool xMark = input.bool(true, "Mostra i segnalini di incrocio sul grafico", group = G_ALERT)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  5. FUNZIONI DI CALCOLO
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+// ── f_ma() : funzione UNICA di calcolo delle medie mobili ─────────────────────────────────
+// Il parametro `tipo` è dichiarato esplicitamente "simple string": il valore proviene da
+// input.string() e quindi NON cambia mai durante l'esecuzione dello script. Questo è ciò che
+// autorizza lo switch: il ramo selezionato è identico su ogni barra, perciò le funzioni ta.*
+// (che mantengono buffer storici interni) vengono valutate su OGNI barra e i loro buffer
+// restano contigui. Con un selettore "series" i risultati sarebbero silenziosamente errati.
+// Anche `len` è "simple int": ta.ema/ta.wma/ta.hma/ta.alma lo richiedono (in v6 passare un
+// "series int" è un errore di compilazione, non più una svista tollerata come in v5).
+f_ma(simple string tipo, float src, simple int len) =>
+    // Difesa sui periodi degeneri: ta.hma() calcola internamente ta.wma(src, len/2), che con
+    // len = 1 riceve 0; ta.linreg(src, 1, 0) è una regressione su un solo punto (denominatore
+    // nullo). In entrambi i casi la media sparirebbe dal grafico senza spiegazione.
+    simple int lenSic = (tipo == "HMA" or tipo == "LSMA") and len < 2 ? 2 : len
+    // Le tre EMA a cascata servono a DEMA e TEMA, che NON esistono come built-in in Pine
+    // (ta.dema/ta.tema appartengono alla libreria TradingView/ta, non al linguaggio).
+    // Vengono calcolate fuori dallo switch così sono sempre valutate: è la forma più sicura.
+    float e1 = ta.ema(src, lenSic)
+    float e2 = ta.ema(e1, lenSic)
+    float e3 = ta.ema(e2, lenSic)
+    switch tipo
+        "SMA"      => ta.sma(src, lenSic)
+        "EMA"      => e1
+        "WMA"      => ta.wma(src, lenSic)
+        "HMA"      => ta.hma(src, lenSic)
+        "RMA/SMMA" => ta.rma(src, lenSic)         // ta.rma È la SMMA di Wilder (alpha = 1/len)
+        "VWMA"     => ta.vwma(src, lenSic)
+        "DEMA"     => 2.0 * e1 - e2               // DEMA = 2*EMA1 - EMA2
+        "TEMA"     => 3.0 * (e1 - e2) + e3        // TEMA = 3*EMA1 - 3*EMA2 + EMA3
+        "LSMA"     => ta.linreg(src, lenSic, 0)   // ta.linreg con offset 0 È la LSMA
+        "ALMA"     => ta.alma(src, lenSic, almaOff, almaSig)
+        => ta.sma(src, lenSic)                    // ramo default: in v6 è obbligatorio
+
+// ── Tecnica non-repainting ufficiale con request.security ─────────────────────────────────
+// Fonte: esempio "Advanced request.security() calls" della reference v6.
+//   - nel contesto RICHIESTO l'espressione va sfasata di 1 barra quando si è in tempo reale;
+//   - nel contesto del GRAFICO il risultato va sfasato di 1 barra sullo storico.
+// Gli sfasamenti sono scritti come ternari fra due indici COSTANTI (`x[1]` / `x`) e non come
+// `x[variabile]`: il risultato è identico, ma il dimensionamento automatico dei buffer storici
+// non può fallire, quindi non serve max_bars_back.
+// Il valore è lo stesso su barre storiche e in tempo reale, quindi NON ripinge, e si ottiene
+// mantenendo lookahead = barmerge.lookahead_off (nessun future leak).
+// COMPROMESSO DICHIARATO: il valore MTF è quello dell'ultima barra HTF CHIUSA. La linea
+// aggiorna un gradino dopo rispetto a una lettura "live", ma non viene mai riscritta.
+f_maSfasata(simple string tipo, float src, simple int len) =>
+    float m = f_ma(tipo, src, len)
+    barstate.isrealtime ? m[1] : m
+
+// ── f_maMtf() : media mobile con timeframe opzionale ──────────────────────────────────────
+f_maMtf(simple string tf, simple string tipo, float src, simple int len) =>
+    // La media locale è calcolata SEMPRE, su ogni barra: qualunque ramo venga scelto più sotto,
+    // i buffer interni delle funzioni ta.* restano contigui.
+    float locale = f_ma(tipo, src, len)
+
+    // Confronto in secondi. L'argomento passato a timeframe.in_seconds() non è mai la stringa
+    // vuota (che non è un timeframe valido): con il campo vuoto si usa timeframe.period.
+    int secGraf = timeframe.in_seconds()
+    int secTf   = timeframe.in_seconds(tf == "" ? timeframe.period : tf)
+
+    // Guardia sui timeframe INFERIORI, raccomandata dalla reference ufficiale: request.security()
+    // non impedisce di chiedere un timeframe più basso di quello del grafico, ma restituirebbe
+    // dati intrabar e gli sfasamenti pensati per l'HTF perderebbero significato — senza alcun
+    // errore né segnale visivo. Caso tipico: timeframe impostato su "60" con il grafico a 15
+    // minuti (legittimo) e poi grafico portato a 1D.
+    if secTf < secGraf
+        runtime.error("Timeframe della media \"" + tf + "\" INFERIORE a quello del grafico (" +
+             timeframe.period + "). Scegli un timeframe superiore oppure lascia il campo vuoto.")
+
+    // request.security() SOLO quando serve davvero. `tf` è "simple", quindi la condizione è
+    // invariante fra le barre: il ramo eseguito è lo stesso su ogni barra e nessun buffer si
+    // buca. In v6 le chiamate request.*() sono ammesse negli scope locali (il parametro
+    // dynamic_requests di indicator() vale true per default). Con i default dello script
+    // (sei campi timeframe vuoti) il costo scende da 6 richieste per barra a 0.
+    // Se il timeframe richiesto COINCIDE con quello del grafico si resta sul calcolo locale:
+    // passare dal ramo remoto introdurrebbe uno sfasamento di una barra rispetto a una media
+    // configurata in modo equivalente ma con il campo vuoto.
+    float remoto = na
+    if secTf > secGraf
+        remoto := request.security(syminfo.tickerid, tf, f_maSfasata(tipo, src, len),
+             gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_off)
+    secTf > secGraf ? (barstate.isrealtime ? remoto : remoto[1]) : locale
+
+// ── Piccoli helper di formattazione e conteggio ───────────────────────────────────────────
+f_fmt(float v) => na(v) ? "n/d" : str.tostring(v, format.mintick)
+f_pos(float v) => na(v) ? "—" : close > v ? "▲ sopra" : close < v ? "▼ sotto" : "= pari"
+f_colPos(float v, color cUp, color cDn, color cNa) => na(v) ? cNa : close > v ? cUp : cDn
+f_attiva(bool a, float v) => a and not na(v) ? 1 : 0
+f_sopra(bool a, float v)  => a and not na(v) and close > v ? 1 : 0
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  6. CALCOLO — SEZIONE A: MEDIE MOBILI
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+float ma1 = f_maMtf(tf1, tip1, srcMA, len1)
+float ma2 = f_maMtf(tf2, tip2, srcMA, len2)
+float ma3 = f_maMtf(tf3, tip3, srcMA, len3)
+float ma4 = f_maMtf(tf4, tip4, srcMA, len4)
+float ma5 = f_maMtf(tf5, tip5, srcMA, len5)
+float ma6 = f_maMtf(tf6, tip6, srcMA, len6)
+
+// Nomi leggibili, usati dalle etichette, dalla tabella e dai messaggi di alert.
+string nom1 = tip1 + " " + str.tostring(len1) + (tf1 == "" ? "" : " " + tf1)
+string nom2 = tip2 + " " + str.tostring(len2) + (tf2 == "" ? "" : " " + tf2)
+string nom3 = tip3 + " " + str.tostring(len3) + (tf3 == "" ? "" : " " + tf3)
+string nom4 = tip4 + " " + str.tostring(len4) + (tf4 == "" ? "" : " " + tf4)
+string nom5 = tip5 + " " + str.tostring(len5) + (tf5 == "" ? "" : " " + tf5)
+string nom6 = tip6 + " " + str.tostring(len6) + (tf6 == "" ? "" : " " + tf6)
+
+// Selettori di slot. Sono semplici scelte di valore (nessuna ta.* nei rami), quindi
+// perfettamente sicure anche con selettore proveniente da input e anche come operando
+// destro di un `and` (dove la valutazione in corto circuito potrebbe saltarle).
+f_valSlot(simple int i) =>
+    switch i
+        1 => ma1
+        2 => ma2
+        3 => ma3
+        4 => ma4
+        5 => ma5
+        6 => ma6
+        => float(na)
+
+f_nomeSlot(simple int i) =>
+    switch i
+        1 => nom1
+        2 => nom2
+        3 => nom3
+        4 => nom4
+        5 => nom5
+        6 => nom6
+        => "n/d"
+
+// Stato di attivazione dello slot: serve al Ribbon e agli alert di incrocio, che altrimenti
+// lavorerebbero su medie calcolate ma NON disegnate (display.none), producendo segnali che
+// l'utente non può riconciliare con il grafico.
+f_attSlot(simple int i) =>
+    switch i
+        1 => att1
+        2 => att2
+        3 => att3
+        4 => att4
+        5 => att5
+        6 => att6
+        => false
+
+// ── Ribbon ───────────────────────────────────────────────────────────────────────────────
+float ribValA = f_valSlot(ribA)
+float ribValB = f_valSlot(ribB)
+// Il Ribbon ha senso solo fra due slot DIVERSI ed ENTRAMBI attivi: con ribA == ribB il
+// riempimento avrebbe spessore zero, con uno slot spento sarebbe agganciato a una linea invisibile.
+bool  ribValido = ribOn and ribA != ribB and f_attSlot(ribA) and f_attSlot(ribB)
+bool  ribBull   = not na(ribValA) and not na(ribValB) and ribValA > ribValB
+color colRibbon = not ribValido or na(ribValA) or na(ribValB) ? na : ribBull ? colRibU : colRibD
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  7. CALCOLO — SEZIONE B: BANDE DI BOLLINGER
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+float bbBasis = f_ma(bbTipo, bbSrc, bbLen)
+
+// La semi-ampiezza delle bande deve misurare la VOLATILITÀ, cioè la dispersione attorno alla
+// MEDIA della finestra: ta.stdev() è quindi la scelta corretta con QUALUNQUE basis. Vale infatti
+//     sqrt( (1/n)·Σ(x−C)² ) = sqrt( σ² + (SMA(n) − C)² )
+// dove il secondo termine è il LAG del basis rispetto alla media, non dispersione. Usarlo come
+// semi-ampiezza gonfierebbe le bande in proporzione al ritardo/anticipo del basis (l'effetto è
+// massimo proprio con i tipi a riduzione di lag: HMA, LSMA, DEMA, TEMA) e trasformerebbe
+// BandWidth e Squeeze da misure di COMPRESSIONE DELLA VOLATILITÀ in rilevatori di assenza di
+// trend. Il basis resta il CENTRO delle bande; la dispersione resta quella attorno alla media.
+float bbDev = ta.stdev(bbSrc, bbLen)        // biased = true (popolazione), media interna = ta.sma
+
+float bbUp1 = bbBasis + bbDev * bbMult1
+float bbDn1 = bbBasis - bbDev * bbMult1
+float bbUp2 = bbBasis + bbDev * bbMult2
+float bbDn2 = bbBasis - bbDev * bbMult2
+
+// %B e BandWidth. %B non è limitato a [0,1]: >1 significa sorgente oltre la banda superiore.
+// %B va calcolato sulla STESSA serie che genera le bande (definizione di John Bollinger:
+// %B = (Prezzo − BandaInf) / (BandaSup − BandaInf)). Usare `close` con una `bbSrc` diversa
+// darebbe un numero né normalizzato né interpretabile.
+// La soglia anti-divisione-per-zero è RELATIVA alla scala dello strumento: una costante
+// assoluta (1e-10 in unità di prezzo) annullerebbe %B e BandWidth sugli strumenti
+// micro-quotati, dove un'ampiezza di banda di 1e-11 è perfettamente legittima.
+float bbEps = syminfo.mintick * 1e-3
+float bbAmp = bbUp1 - bbDn1
+float pctB  = (na(bbAmp) or bbAmp <= bbEps) ? na : (bbSrc - bbDn1) / bbAmp
+// math.abs() al denominatore: su simboli spread/ratio, o con una sorgente che oscilla attorno
+// allo zero, il basis può essere NEGATIVO. Senza valore assoluto BandWidth diventerebbe
+// negativa e ta.lowest() sceglierebbe le bande PIÙ LARGHE, invertendo la logica di Squeeze.
+float bandW = (na(bbBasis) or math.abs(bbBasis) <= bbEps) ? na : bbAmp / math.abs(bbBasis) * 100.0
+
+// Squeeze: BandWidth al minimo delle ultime N barre.
+// ATTENZIONE v6: `and`/`or` sono valutati in corto circuito, quindi ta.lowest() NON deve
+// mai comparire come operando destro di un `and`, altrimenti verrebbe saltata su alcune
+// barre e il suo buffer si bucherebbe. La si calcola qui, nello scope globale.
+float bandWMin = ta.lowest(bandW, sqzLen)
+// ta.lowest() IGNORA i valori na e smette di restituire na dopo sqzLen BARRE di grafico, non
+// dopo sqzLen valori validi. Poiché bandW è na per le prime bbLen-1 barre, sulla prima barra
+// con BandWidth valido la finestra conterrebbe un solo campione: il "minimo" coinciderebbe per
+// costruzione con il valore corrente e lo Squeeze scatterebbe (sfondo giallo + alert) su ogni
+// grafico appena caricato, e di nuovo ogni volta che bbLen > sqzLen. Si contano quindi le barre
+// con BandWidth VALIDO effettivamente osservate.
+var int bandWCnt = 0
+if not na(bandW)
+    bandWCnt += 1
+bool squeeze  = sqzOn and bbOn and bandWCnt >= sqzLen and not na(bandW) and not na(bandWMin) and bandW <= bandWMin
+bool sqzStart = squeeze and not squeeze[1]
+
+// Uscite di banda. Si distingue il PRIMO evento dal regime di "walk the band": una chiusura
+// fuori banda non è un segnale di inversione finché il prezzo cammina sulla banda.
+// Il confronto usa bbSrc, cioè la stessa serie che genera le bande (di fabbrica: la chiusura).
+bool fuoriUp = bbOn and not na(bbUp1) and bbSrc > bbUp1
+bool fuoriDn = bbOn and not na(bbDn1) and bbSrc < bbDn1
+bool primoUp = fuoriUp and not fuoriUp[1]
+bool primoDn = fuoriDn and not fuoriDn[1]
+
+// Colori dinamici delle bande principali (evidenziano lo squeeze) e dell'area riempita.
+color colBanda1    = squeeze ? colSqz : colBBUp
+color colAreaBase  = color.new(colBBUp, bbFillTr)
+color colAreaDin   = na(pctB) ? colAreaBase : pctB > 1 ? color.new(#EF5350, bbFillTr) : pctB < 0 ? color.new(#26A69A, bbFillTr) : colAreaBase
+color colAreaBB    = bbFillOn ? (bbFillDin ? colAreaDin : colAreaBase) : na
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  8. CALCOLO — SEZIONE C: VWAP
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+// Rilevamento empirico dell'assenza di volume. È usato SOLO per l'etichetta di avviso
+// sull'ultima barra: come condizione di DISEGNO sarebbe sbagliato, perché ta.cum() resta a
+// zero anche sulle prime barre di un simbolo CHE HA volume (pre-market di un'azione, inizio
+// contratto di un future, titoli illiquidi in apertura), aprendo un buco sul bordo sinistro
+// del grafico e sopprimendo gli incroci prezzo/VWAP. Del resto ta.vwap() restituisce già na
+// da sé quando il volume manca (rapporto 0/0), quindi il gate sarebbe anche ridondante.
+// nz() è necessario perché `volume` può essere na, non solo 0.
+bool senzaVolume = ta.cum(nz(volume)) == 0
+
+// Tutte le condizioni di cambio periodo sono calcolate nello scope globale e solo dopo
+// selezionate: timeframe.change() confronta con la barra precedente e va valutata sempre.
+bool camD = timeframe.change("D")
+bool camW = timeframe.change("W")
+bool camM = timeframe.change("M")
+bool camQ = timeframe.change("3M")
+bool camY = timeframe.change("12M")
+
+// Ancoraggio su data scelta dall'utente: deve scattare UNA SOLA volta. La condizione
+// `time >= vwData` è vera su tutte le barre successive e, passata così com'è a ta.vwap(),
+// azzererebbe il calcolo a ogni barra restituendo semplicemente la sorgente.
+var bool giaAncorato = false
+bool ancoraData = false
+if not giaAncorato and time >= vwData
+    ancoraData   := true
+    giaAncorato  := true
+
+bool ancoraVwap = switch vwAncora
+    "Sessione"            => camD
+    "Settimana"           => camW
+    "Mese"                => camM
+    "Trimestre"           => camQ
+    "Anno"                => camY
+    "Data personalizzata" => ancoraData
+    => camD
+
+// ta.vwap() resta na finché l'ancoraggio non diventa true la prima volta: senza questa
+// forzatura si perderebbe l'intero primo periodo. È la stessa correzione applicata dalla
+// VWAP nativa di TradingView. Esclusa per l'ancoraggio a data, dove l'inizio DEVE
+// coincidere con la data scelta e non con l'inizio del grafico.
+// Il test deve identificare la PRIMA BARRA DEL GRAFICO: `na(vwSrc[1])` non lo fa, perché è
+// vero anche dopo OGNI buco della sorgente, e vwSrc è un input.source che può puntare al plot
+// di un altro indicatore. Ri-ancorerebbe la VWAP a metà grafico, azzerando l'accumulo (e le
+// bande, che collasserebbero sulla linea) in punti arbitrari.
+if bar_index == 0 and vwAncora != "Data personalizzata"
+    ancoraVwap := true
+
+// Una sola chiamata con stdev_mult = 1: sigma (in unità di prezzo) si ricava per differenza.
+// Da quel valore si generano tutte e 3 le coppie di bande con moltiplicatori indipendenti.
+// Il terzo elemento della tupla è simmetrico e quindi ridondante: si scarta con `_`.
+[vwGrezzo, vwUp1sd, _] = ta.vwap(vwSrc, ancoraVwap, 1)
+
+bool  vwVisibile = vwOn and not (vwNoDWM and timeframe.isdwm)
+float vwapVal    = vwVisibile ? vwGrezzo : na
+float vwSigma    = vwUp1sd - vwGrezzo
+float vwBase     = vwModo == "Deviazione standard" ? vwSigma : vwGrezzo * 0.01
+
+float vwU1 = vwVisibile and vwB1On ? vwGrezzo + vwBase * vwB1Mult : na
+float vwL1 = vwVisibile and vwB1On ? vwGrezzo - vwBase * vwB1Mult : na
+float vwU2 = vwVisibile and vwB2On ? vwGrezzo + vwBase * vwB2Mult : na
+float vwL2 = vwVisibile and vwB2On ? vwGrezzo - vwBase * vwB2Mult : na
+float vwU3 = vwVisibile and vwB3On ? vwGrezzo + vwBase * vwB3Mult : na
+float vwL3 = vwVisibile and vwB3On ? vwGrezzo - vwBase * vwB3Mult : na
+
+// MVWAP: media mobile semplice DELLA serie VWAP. ATTENZIONE: ta.sma() restituisce na se anche
+// un solo valore della finestra è na, e vwGrezzo è na prima del primo ancoraggio: la MVWAP
+// parte quindi mvwLen barre dopo il primo ancoraggio valido. È il comportamento atteso, non un
+// difetto. Non si azzera agli ancoraggi (per definizione).
+float mvwapVal = ta.sma(vwGrezzo, mvwLen)
+float mvwapOut = mvwOn and vwVisibile ? mvwapVal : na
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  9. PLOT — MEDIE MOBILI E RIBBON        [conteggio plot: 6 + 2 + 1 fill]
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+// La visibilità è gestita interamente da `display`, che accetta valori "input": con lo slot
+// spento la linea non compare né sul grafico, né nella status line, né nella Data Window.
+// `editable` non servirebbe allo scopo: pur accettando un "input bool", controlla soltanto se
+// lo stile della linea è modificabile dalla scheda "Stile", non se la linea viene disegnata.
+plot(ma1, "MA 1", color = col1, linewidth = wid1, display = att1 ? display.all : display.none)
+plot(ma2, "MA 2", color = col2, linewidth = wid2, display = att2 ? display.all : display.none)
+plot(ma3, "MA 3", color = col3, linewidth = wid3, display = att3 ? display.all : display.none)
+plot(ma4, "MA 4", color = col4, linewidth = wid4, display = att4 ? display.all : display.none)
+plot(ma5, "MA 5", color = col5, linewidth = wid5, display = att5 ? display.all : display.none)
+plot(ma6, "MA 6", color = col6, linewidth = wid6, display = att6 ? display.all : display.none)
+
+// fill() accetta soltanto ID restituiti da plot() o da hline(), e i due ID devono essere
+// dello stesso tipo. Gli slot del ribbon sono scelti a runtime dall'utente, quindi si
+// creano due plot invisibili che fanno da contenitore del riempimento.
+pRibA = plot(ribValido ? ribValA : na, "Ribbon A", color = color.new(color.gray, 100), display = display.none, editable = false)
+pRibB = plot(ribValido ? ribValB : na, "Ribbon B", color = color.new(color.gray, 100), display = display.none, editable = false)
+fill(pRibA, pRibB, color = colRibbon, title = "Ribbon")
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 10. PLOT — BANDE DI BOLLINGER          [conteggio plot: 7 + 2 fill + 1 bgcolor + 2 shape]
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+pBBUp1 = plot(bbOn ? bbUp1 : na, "BB Superiore #1", color = colBanda1, linewidth = 1, offset = bbOff)
+pBBDn1 = plot(bbOn ? bbDn1 : na, "BB Inferiore #1", color = colBanda1, linewidth = 1, offset = bbOff)
+plot(bbOn ? bbBasis : na, "BB Basis", color = colBBBas, linewidth = 1, offset = bbOff)
+pBBUp2 = plot(bbOn and bb2On ? bbUp2 : na, "BB Superiore #2", color = color.new(colBBUp, 45), linewidth = 1, offset = bbOff, display = bb2On ? display.all : display.none)
+pBBDn2 = plot(bbOn and bb2On ? bbDn2 : na, "BB Inferiore #2", color = color.new(colBBUp, 45), linewidth = 1, offset = bbOff, display = bb2On ? display.all : display.none)
+
+fill(pBBUp1, pBBDn1, color = colAreaBB, title = "Area Bollinger #1")
+fill(pBBUp2, pBBDn2, color = bbFillOn and bb2On ? color.new(colBBUp, math.min(bbFillTr + 4, 100)) : na, title = "Area Bollinger #2")
+
+// Evidenziazione dello Squeeze.
+bgcolor(squeeze ? colSqz : na, title = "Squeeze")
+
+// Segnali di uscita di banda: solo la PRIMA barra della sequenza.
+plotshape(bbSegnOn and primoUp, title = "Sorgente sopra la banda alta", style = shape.triangledown,
+     location = location.abovebar, color = #EF5350, size = size.tiny)
+plotshape(bbSegnOn and primoDn, title = "Sorgente sotto la banda bassa", style = shape.triangleup,
+     location = location.belowbar, color = #26A69A, size = size.tiny)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 11. PLOT — VWAP                        [conteggio plot: 1 + 6 + 1 + 5 fill]
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+plot(vwapVal, "VWAP", color = colVW, linewidth = 2)
+
+pVWU1 = plot(vwU1, "VWAP Sup. #1", color = colVWB1, linewidth = 1, display = vwB1On ? display.all : display.none)
+pVWL1 = plot(vwL1, "VWAP Inf. #1", color = colVWB1, linewidth = 1, display = vwB1On ? display.all : display.none)
+pVWU2 = plot(vwU2, "VWAP Sup. #2", color = colVWB2, linewidth = 1, display = vwB2On ? display.all : display.none)
+pVWL2 = plot(vwL2, "VWAP Inf. #2", color = colVWB2, linewidth = 1, display = vwB2On ? display.all : display.none)
+pVWU3 = plot(vwU3, "VWAP Sup. #3", color = colVWB3, linewidth = 1, display = vwB3On ? display.all : display.none)
+pVWL3 = plot(vwL3, "VWAP Inf. #3", color = colVWB3, linewidth = 1, display = vwB3On ? display.all : display.none)
+
+// Riempimenti fra livelli ADIACENTI, non aree annidate una dentro l'altra: le tre fasce restano
+// visivamente distinte e si legge subito in quale deviazione si trova il prezzo. Ogni fascia
+// esterna richiede anche la banda immediatamente più interna, che ne costituisce il bordo.
+fill(pVWU1, pVWL1, color = vwFillOn and vwB1On ? color.new(colVWB1, vwFillTr) : na, title = "Area VWAP ±1")
+fill(pVWU2, pVWU1, color = vwFillOn and vwB2On and vwB1On ? color.new(colVWB2, vwFillTr) : na, title = "Area VWAP superiore 1→2")
+fill(pVWL1, pVWL2, color = vwFillOn and vwB2On and vwB1On ? color.new(colVWB2, vwFillTr) : na, title = "Area VWAP inferiore 1→2")
+fill(pVWU3, pVWU2, color = vwFillOn and vwB3On and vwB2On ? color.new(colVWB3, vwFillTr) : na, title = "Area VWAP superiore 2→3")
+fill(pVWL2, pVWL3, color = vwFillOn and vwB3On and vwB2On ? color.new(colVWB3, vwFillTr) : na, title = "Area VWAP inferiore 2→3")
+
+plot(mvwapOut, "MVWAP", color = colMVW, linewidth = 2, display = mvwOn ? display.all : display.none)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 12. ETICHETTE A FINE GRAFICO E AVVISI NON BLOCCANTI
+//     (label.* e table.* NON consumano conteggi di plot)
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+// L'etichetta viene creata UNA SOLA VOLTA e poi aggiornata in place con le label.set_*().
+// barstate.islast è vero a ogni tick della barra corrente: distruggere e ricreare gli oggetti
+// grafici a ogni aggiornamento di prezzo sarebbe churn inutile su uno script già impegnativo.
+f_etichetta(label id, bool mostra, float valore, string testo, color colore) =>
+    label ris = id
+    if barstate.islast
+        if mostra and not na(valore)
+            if na(ris)
+                ris := label.new(bar_index + 3, valore, testo, xloc = xloc.bar_index,
+                     yloc = yloc.price, color = color.new(color.black, 100),
+                     style = label.style_label_left, textcolor = colore, size = size.small)
+            else
+                label.set_xy(ris, bar_index + 3, valore)
+                label.set_text(ris, testo)
+                label.set_textcolor(ris, colore)
+        else if not na(ris)
+            label.delete(ris)
+            ris := na
+    ris
+
+var label lb1 = na
+var label lb2 = na
+var label lb3 = na
+var label lb4 = na
+var label lb5 = na
+var label lb6 = na
+
+lb1 := f_etichetta(lb1, etichetteOn and att1, ma1, nom1, col1)
+lb2 := f_etichetta(lb2, etichetteOn and att2, ma2, nom2, col2)
+lb3 := f_etichetta(lb3, etichetteOn and att3, ma3, nom3, col3)
+lb4 := f_etichetta(lb4, etichetteOn and att4, ma4, nom4, col4)
+lb5 := f_etichetta(lb5, etichetteOn and att5, ma5, nom5, col5)
+lb6 := f_etichetta(lb6, etichetteOn and att6, ma6, nom6, col6)
+
+// Avviso non bloccante per i simboli privi di volume. Nessun runtime.error(): lo script
+// continua a disegnare medie e Bollinger, che non dipendono dal volume.
+var label lbVol = na
+if barstate.islast
+    bool mostraVol = vwAvviso and vwOn and senzaVolume
+    if mostraVol and na(lbVol)
+        lbVol := label.new(bar_index, high,
+             "VWAP non disponibile\nIl fornitore dei dati non pubblica i volumi per " + syminfo.ticker +
+             " (" + syminfo.type + ")",
+             xloc = xloc.bar_index, yloc = yloc.price, color = color.new(#EF5350, 15),
+             style = label.style_label_down, textcolor = color.white, size = size.small)
+    else if mostraVol
+        label.set_xy(lbVol, bar_index, high)
+    else if not na(lbVol)
+        label.delete(lbVol)
+        lbVol := na
+
+// Avviso non bloccante per l'ancoraggio a data mai scattato. Se la data scelta è successiva
+// all'ultima barra caricata, ta.vwap() resta na su TUTTO il grafico (la reference: «Calculations
+// only begin the first time the anchor condition becomes true. Until then, the function returns
+// na») e la forzatura iniziale è deliberatamente esclusa per questa modalità: senza avviso
+// l'indicatore sembrerebbe semplicemente rotto.
+var label lbAnc = na
+if barstate.islast
+    bool mostraAnc = vwOn and vwAncora == "Data personalizzata" and not giaAncorato
+    if mostraAnc and na(lbAnc)
+        lbAnc := label.new(bar_index, low,
+             "VWAP non ancorata\nLa data scelta (" +
+             str.format_time(vwData, "dd/MM/yyyy", syminfo.timezone) +
+             ") è successiva all'ultima barra disponibile.\nScegli una data più vecchia.",
+             xloc = xloc.bar_index, yloc = yloc.price, color = color.new(#FFB74D, 15),
+             style = label.style_label_up, textcolor = color.black, size = size.small)
+    else if mostraAnc
+        label.set_xy(lbAnc, bar_index, low)
+    else if not na(lbAnc)
+        label.delete(lbAnc)
+        lbAnc := na
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 13. TABELLA INFORMATIVA
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+// Sintesi di tendenza: quante medie attive hanno il prezzo sopra di sé.
+int nAttive = f_attiva(att1, ma1) + f_attiva(att2, ma2) + f_attiva(att3, ma3) + f_attiva(att4, ma4) + f_attiva(att5, ma5) + f_attiva(att6, ma6)
+int nSopra  = f_sopra(att1, ma1)  + f_sopra(att2, ma2)  + f_sopra(att3, ma3)  + f_sopra(att4, ma4)  + f_sopra(att5, ma5)  + f_sopra(att6, ma6)
+
+string trendTxt = nAttive == 0 ? "n/d" : nSopra * 2 > nAttive ? "Rialzista" : nSopra * 2 < nAttive ? "Ribassista" : "Neutrale"
+color  trendCol = nAttive == 0 ? tabTxt : nSopra * 2 > nAttive ? #26A69A : nSopra * 2 < nAttive ? #EF5350 : #FFB74D
+
+// La posizione è "series string" per table.new(), quindi un input.string va benissimo.
+string posTab = switch tabPos
+    "In alto a sinistra"   => position.top_left
+    "In alto al centro"    => position.top_center
+    "In alto a destra"     => position.top_right
+    "Al centro a sinistra" => position.middle_left
+    "Al centro"            => position.middle_center
+    "Al centro a destra"   => position.middle_right
+    "In basso a sinistra"  => position.bottom_left
+    "In basso al centro"   => position.bottom_center
+    "In basso a destra"    => position.bottom_right
+    => position.top_right
+
+string dimTab = switch tabDim
+    "Minuscolo" => size.tiny
+    "Piccolo"   => size.small
+    "Normale"   => size.normal
+    "Grande"    => size.large
+    => size.small
+
+// Ogni chiamata a table.cell() riscrive TUTTE le proprietà della cella: si compila per righe.
+f_riga(tid, r, etichetta, valore, stato, colStato, colTesto, dim) =>
+    table.cell(tid, 0, r, etichetta, text_color = colTesto,  text_size = dim, text_halign = text.align_left)
+    table.cell(tid, 1, r, valore,    text_color = colTesto,  text_size = dim, text_halign = text.align_right)
+    table.cell(tid, 2, r, stato,     text_color = colStato,  text_size = dim, text_halign = text.align_center)
+
+// var + barstate.islast: la tabella si crea una sola volta e si popola solo sull'ultima barra.
+// Tutti i parametri di table.new() accettano "series", quindi si possono passare direttamente
+// i valori degli input senza ricorrere alle funzioni table.set_*().
+var table tbl = table.new(position = posTab, columns = 3, rows = 17,
+     bgcolor      = tabBg,
+     frame_color  = color.new(tabTxt, 70), frame_width  = 1,
+     border_color = color.new(tabTxt, 85), border_width = 1)
+
+if tabOn and barstate.islast
+    table.clear(tbl, 0, 0, 2, 16)
+
+    int r = 0
+    f_riga(tbl, r, "Indicatore", "Valore", "Prezzo", tabTxt, tabTxt, dimTab)
+    r += 1
+
+    // ── Medie mobili attive ──────────────────────────────────────────────────────────────
+    if att1
+        f_riga(tbl, r, nom1, f_fmt(ma1), f_pos(ma1), f_colPos(ma1, #26A69A, #EF5350, tabTxt), col1, dimTab)
+        r += 1
+    if att2
+        f_riga(tbl, r, nom2, f_fmt(ma2), f_pos(ma2), f_colPos(ma2, #26A69A, #EF5350, tabTxt), col2, dimTab)
+        r += 1
+    if att3
+        f_riga(tbl, r, nom3, f_fmt(ma3), f_pos(ma3), f_colPos(ma3, #26A69A, #EF5350, tabTxt), col3, dimTab)
+        r += 1
+    if att4
+        f_riga(tbl, r, nom4, f_fmt(ma4), f_pos(ma4), f_colPos(ma4, #26A69A, #EF5350, tabTxt), col4, dimTab)
+        r += 1
+    if att5
+        f_riga(tbl, r, nom5, f_fmt(ma5), f_pos(ma5), f_colPos(ma5, #26A69A, #EF5350, tabTxt), col5, dimTab)
+        r += 1
+    if att6
+        f_riga(tbl, r, nom6, f_fmt(ma6), f_pos(ma6), f_colPos(ma6, #26A69A, #EF5350, tabTxt), col6, dimTab)
+        r += 1
+
+    // ── Bande di Bollinger ───────────────────────────────────────────────────────────────
+    if bbOn
+        f_riga(tbl, r, "BB Sup. (" + bbTipo + " " + str.tostring(bbLen) + ")", f_fmt(bbUp1), f_pos(bbUp1), f_colPos(bbUp1, #26A69A, #EF5350, tabTxt), colBBUp, dimTab)
+        r += 1
+        f_riga(tbl, r, "BB Basis", f_fmt(bbBasis), f_pos(bbBasis), f_colPos(bbBasis, #26A69A, #EF5350, tabTxt), colBBBas, dimTab)
+        r += 1
+        f_riga(tbl, r, "BB Inf.", f_fmt(bbDn1), f_pos(bbDn1), f_colPos(bbDn1, #26A69A, #EF5350, tabTxt), colBBUp, dimTab)
+        r += 1
+        f_riga(tbl, r, "%B", na(pctB) ? "n/d" : str.tostring(pctB * 100.0, "#.0") + "%",
+             na(pctB) ? "—" : pctB > 1 ? "fuori alto" : pctB < 0 ? "fuori basso" : "in banda",
+             na(pctB) ? tabTxt : pctB > 1 ? #EF5350 : pctB < 0 ? #26A69A : tabTxt, tabTxt, dimTab)
+        r += 1
+        f_riga(tbl, r, "BandWidth", na(bandW) ? "n/d" : str.tostring(bandW, "#.00") + "%",
+             squeeze ? "SQUEEZE" : "normale", squeeze ? #FFB74D : tabTxt, tabTxt, dimTab)
+        r += 1
+
+    // ── VWAP ─────────────────────────────────────────────────────────────────────────────
+    if vwOn
+        f_riga(tbl, r, "VWAP (" + vwAncora + ")", senzaVolume ? "no volume" : f_fmt(vwapVal),
+             senzaVolume ? "—" : f_pos(vwapVal), senzaVolume ? #EF5350 : f_colPos(vwapVal, #26A69A, #EF5350, tabTxt), colVW, dimTab)
+        r += 1
+        if mvwOn
+            f_riga(tbl, r, "MVWAP " + str.tostring(mvwLen), f_fmt(mvwapOut), f_pos(mvwapOut), f_colPos(mvwapOut, #26A69A, #EF5350, tabTxt), colMVW, dimTab)
+            r += 1
+
+    // ── Sintesi ──────────────────────────────────────────────────────────────────────────
+    // Formulazione esplicita: nSopra conta le medie che il prezzo ha SOPRA di sé, cioè le medie
+    // che si trovano SOTTO il prezzo. Scritto "3/5 MA sotto" sarebbe ambiguo.
+    f_riga(tbl, r, "Tendenza",
+         str.tostring(nSopra) + "/" + str.tostring(nAttive) + " MA sotto il prezzo",
+         trendTxt, trendCol, tabTxt, dimTab)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 14. SEGNALI E ALERT
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+
+// ── Golden / Death Cross fra i due slot scelti ───────────────────────────────────────────
+float maVeloce = f_valSlot(xFast)
+float maLenta  = f_valSlot(xSlow)
+string nomVel  = f_nomeSlot(xFast)
+string nomLen  = f_nomeSlot(xSlow)
+
+// ta.crossover/ta.crossunder vanno calcolate nello scope globale, mai come operando destro
+// di un `and`: in v6 la valutazione in corto circuito le salterebbe su alcune barre.
+bool crossUp = ta.crossover(maVeloce, maLenta)
+bool crossDn = ta.crossunder(maVeloce, maLenta)
+// Gli slot devono essere diversi ed entrambi ATTIVI: una media disattivata è nascosta dal
+// grafico (display.none) ma resta calcolata, quindi senza questo controllo gli alert
+// scatterebbero su linee invisibili e non riconciliabili. f_attSlot() non contiene funzioni
+// ta.*, perciò può stare a destra di un `and` senza rischi di corto circuito.
+bool xValido = xFast != xSlow and f_attSlot(xFast) and f_attSlot(xSlow)
+bool golden  = crossUp and xValido
+bool death   = crossDn and xValido
+
+// ── Prezzo che incrocia la VWAP ──────────────────────────────────────────────────────────
+bool vwCrossUpRaw = ta.crossover(close, vwGrezzo)
+bool vwCrossDnRaw = ta.crossunder(close, vwGrezzo)
+// Sulla barra di ancoraggio ta.vwap() azzera gli accumulatori PRIMA di aggiungere la barra
+// corrente: vwGrezzo vale esattamente la sorgente di quella barra, mentre vwGrezzo[1] è la
+// VWAP accumulata di tutto il periodo precedente. Il salto fra i due non è un attraversamento
+// del prezzo ma una discontinuità del riferimento, e genererebbe un falso allarme
+// all'apertura di quasi ogni sessione. Si escludono la barra di reset e la prima barra utile
+// dopo un valore na.
+bool vwCrossOk = vwVisibile and not ancoraVwap and not na(vwGrezzo) and not na(vwGrezzo[1])
+bool vwCrossUp = vwCrossUpRaw and vwCrossOk
+bool vwCrossDn = vwCrossDnRaw and vwCrossOk
+
+// ── Segnalini facoltativi di incrocio. Sono 2 conteggi di plot, già inclusi nel budget
+//    dichiarato in testa al file. I colori sono costanti, quindi valgono 1 conteggio l'uno. ─
+plotshape(xMark and golden, title = "Golden Cross", style = shape.labelup, location = location.belowbar,
+     color = #26A69A, text = "GC", textcolor = color.white, size = size.tiny)
+plotshape(xMark and death, title = "Death Cross", style = shape.labeldown, location = location.abovebar,
+     color = #EF5350, text = "DC", textcolor = color.white, size = size.tiny)
+
+// ── alertcondition(): compaiono nella finestra "Crea allarme". Il messaggio deve essere una
+//    stringa COSTANTE, ma TradingView sostituisce a runtime i segnaposto {{ticker}},
+//    {{interval}}, {{close}} e {{time}}: usarli tutti rende la notifica leggibile anche a chi
+//    monitora più grafici dello stesso simbolo.
+//    Ognuna vale 1 conteggio di plot: sono 7, incluse nel budget. ──────────────────────────
+alertcondition(golden, title = "Golden Cross",
+     message = "{{ticker}} ({{interval}}) — GOLDEN CROSS: la media veloce ha incrociato al RIALZO la media lenta. Prezzo {{close}} alle {{time}}")
+alertcondition(death, title = "Death Cross",
+     message = "{{ticker}} ({{interval}}) — DEATH CROSS: la media veloce ha incrociato al RIBASSO la media lenta. Prezzo {{close}} alle {{time}}")
+alertcondition(vwCrossUp, title = "Prezzo sopra la VWAP",
+     message = "{{ticker}} ({{interval}}) — il prezzo ha incrociato la VWAP al RIALZO. Chiusura {{close}} alle {{time}}")
+alertcondition(vwCrossDn, title = "Prezzo sotto la VWAP",
+     message = "{{ticker}} ({{interval}}) — il prezzo ha incrociato la VWAP al RIBASSO. Chiusura {{close}} alle {{time}}")
+alertcondition(primoUp, title = "Chiusura sopra la banda di Bollinger",
+     message = "{{ticker}} ({{interval}}) — chiusura SOPRA la banda di Bollinger superiore. Chiusura {{close}} alle {{time}}")
+alertcondition(primoDn, title = "Chiusura sotto la banda di Bollinger",
+     message = "{{ticker}} ({{interval}}) — chiusura SOTTO la banda di Bollinger inferiore. Chiusura {{close}} alle {{time}}")
+alertcondition(sqzStart, title = "Inizio Squeeze",
+     message = "{{ticker}} ({{interval}}) — INIZIO SQUEEZE: BandWidth al minimo del periodo di osservazione. Prezzo {{close}} alle {{time}}")
+
+// ── alert(): messaggio DINAMICO, non consuma conteggi di plot. Frequenza una volta per
+//    chiusura di barra, per evitare notifiche su valori ancora in formazione. ─────────────
+if golden
+    alert("Golden Cross su " + syminfo.ticker + " (" + timeframe.period + "): " + nomVel +
+         " ha incrociato al rialzo " + nomLen + ". Prezzo " + f_fmt(close), alert.freq_once_per_bar_close)
+if death
+    alert("Death Cross su " + syminfo.ticker + " (" + timeframe.period + "): " + nomVel +
+         " ha incrociato al ribasso " + nomLen + ". Prezzo " + f_fmt(close), alert.freq_once_per_bar_close)
+if vwCrossUp
+    alert("VWAP incrociata al rialzo su " + syminfo.ticker + ". VWAP " + f_fmt(vwapVal) +
+         ", prezzo " + f_fmt(close), alert.freq_once_per_bar_close)
+if vwCrossDn
+    alert("VWAP incrociata al ribasso su " + syminfo.ticker + ". VWAP " + f_fmt(vwapVal) +
+         ", prezzo " + f_fmt(close), alert.freq_once_per_bar_close)
+if primoUp
+    alert("Uscita sopra la banda superiore su " + syminfo.ticker + ". Banda " + f_fmt(bbUp1) +
+         ", sorgente " + f_fmt(bbSrc) + ", %B " + (na(pctB) ? "n/d" : str.tostring(pctB * 100.0, "#.0") + "%"),
+         alert.freq_once_per_bar_close)
+if primoDn
+    alert("Uscita sotto la banda inferiore su " + syminfo.ticker + ". Banda " + f_fmt(bbDn1) +
+         ", sorgente " + f_fmt(bbSrc) + ", %B " + (na(pctB) ? "n/d" : str.tostring(pctB * 100.0, "#.0") + "%"),
+         alert.freq_once_per_bar_close)
+if sqzStart
+    alert("Inizio Squeeze su " + syminfo.ticker + " (" + timeframe.period + "). BandWidth " +
+         (na(bandW) ? "n/d" : str.tostring(bandW, "#.00") + "%") + " al minimo di " +
+         str.tostring(sqzLen) + " barre", alert.freq_once_per_bar_close)
+
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+// 15. NOTE SUL REPAINTING (dichiarazione esplicita)
+// ═══════════════════════════════════════════════════════════════════════════════════════════
+//  1) MEDIE MTF: usano request.security() con lookahead = barmerge.lookahead_off e la tecnica
+//     di sfasamento documentata nella reference ufficiale (una barra indietro nel contesto
+//     richiesto in tempo reale, una barra indietro nel contesto del grafico sullo storico).
+//     Il valore è identico su barre storiche e in tempo reale, quindi NON ripinge. Il
+//     compromesso è che la linea MTF riflette l'ultima barra HTF chiusa e aggiorna un gradino
+//     dopo. Un timeframe INFERIORE a quello del grafico è rifiutato con runtime.error().
+//  2) VWAP e BOLLINGER: si aggiornano tick per tick sulla barra in formazione. È il normale
+//     ciclo di calcolo in tempo reale, non un repainting: i valori storici sono immutabili.
+//     Chi vuole segnali stabili usi gli alert con alert.freq_once_per_bar_close (già impostato).
+//  3) SQUEEZE e SEGNALI DI BANDA: valutati sulla barra corrente; possono comparire e sparire
+//     finché la barra non chiude. Confermati alla chiusura.
+//  4) Nessun uso di barmerge.lookahead_on, di timenow o di chart.left_visible_bar_time:
+//     non esiste alcuna fonte di future leak in questo script.
+// ═══════════════════════════════════════════════════════════════════════════════════════════
